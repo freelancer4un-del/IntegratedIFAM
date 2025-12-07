@@ -1086,7 +1086,60 @@ def render_home():
     """홈 페이지"""
     st.markdown('<p class="section-title"><span class="icon">🏠</span> 대시보드 홈</p>', unsafe_allow_html=True)
     
+    # 포트폴리오 요약 (실제 데이터)
+    funds = get_fund_data()
+    portfolio = get_portfolio_data()
+    
+    total_aum = sum(f['aum'] for f in funds)
+    total_invested = sum(p['amount'] for p in portfolio)
+    total_investments = len([p for p in portfolio if p['amount'] > 0])
+    fund_count = len([p for p in portfolio if p['account'] == '펀드' and p['amount'] > 0])
+    prop_count = len([p for p in portfolio if p['account'] == '고유'])
+    
+    st.markdown("### 📊 IFAM 운용 현황")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card" style="border-left: 3px solid var(--accent-indigo);">
+            <div class="metric-label">총 AUM</div>
+            <div class="metric-value large">{total_aum:,.1f}억</div>
+            <div style="color: var(--text-muted); font-size: 0.75rem;">펀드 {len(funds)}개 운용</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class="metric-card" style="border-left: 3px solid var(--accent-emerald);">
+            <div class="metric-label">투자집행</div>
+            <div class="metric-value large">{total_invested:,.2f}억</div>
+            <div style="color: var(--text-muted); font-size: 0.75rem;">집행률 {total_invested/total_aum*100:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card" style="border-left: 3px solid var(--accent-amber);">
+            <div class="metric-label">투자건수</div>
+            <div class="metric-value large">{total_investments}건</div>
+            <div style="color: var(--text-muted); font-size: 0.75rem;">펀드 {fund_count} / 고유 {prop_count}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(f"""
+        <div class="metric-card" style="border-left: 3px solid var(--accent-violet);">
+            <div class="metric-label">미회수자산</div>
+            <div class="metric-value large">{total_invested:,.2f}억</div>
+            <div style="color: var(--text-muted); font-size: 0.75rem;">회수 0건 | MOIC 1.0x</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
     # 네비게이션 카드
+    st.markdown("### 🧭 바로가기")
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -1688,50 +1741,689 @@ def render_lp_discovery():
                 csv = df_filtered.to_csv(index=False, encoding='utf-8-sig')
                 st.download_button("📥 CSV 다운로드", csv, f"lp_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv", use_container_width=True)
 
+# =============================================================================
+# 포트폴리오 데이터 정의
+# =============================================================================
+def get_fund_data():
+    """펀드 정보"""
+    return [
+        {
+            'id': 'fund_001',
+            'name': '미래환경펀드',
+            'full_name': '환경부 모태펀드 출자 미래환경펀드',
+            'aum': 775.0,
+            'gp': ['현대차증권', 'IFAM'],
+            'lp': '환경부 모태펀드',
+            'vintage': 2023,
+            'investment_period': '2023-2028',
+            'fund_life': '2023-2033',
+            'status': 'active',
+            'committed': 775.0,
+            'called': 360.18,
+            'distributed': 0,
+            'nav': 360.18,
+            'investments': 12
+        },
+        {
+            'id': 'fund_002',
+            'name': 'IPO 일반사모 1호',
+            'full_name': '인프라프론티어 IPO 일반사모투자신탁 제1호',
+            'aum': 84.5,
+            'gp': ['IFAM'],
+            'lp': '일반투자자',
+            'vintage': 2024,
+            'investment_period': '2024-2026',
+            'fund_life': '2024-2029',
+            'status': 'active',
+            'committed': 84.5,
+            'called': 0,
+            'distributed': 0,
+            'nav': 0,
+            'investments': 0
+        }
+    ]
+
+def get_portfolio_data():
+    """포트폴리오 투자 현황"""
+    return [
+        # 펀드 계정 투자 (미래환경펀드)
+        {'id': 1, 'company': '에코솔루션', 'sector': '환경/폐기물', 'fund': '미래환경펀드', 'account': '펀드', 
+         'investment_type': 'RCPS', 'investment_date': '2023-06-15', 'amount': 30.0, 'current_value': 30.0,
+         'shares': 30000, 'price_per_share': 10000, 'valuation': 150.0, 'ownership': 20.0, 'status': 'active',
+         'milestone': 'Series B 준비중', 'next_event': '2025 Q2 Series B'},
+        {'id': 2, 'company': '그린테크', 'sector': '신재생에너지', 'fund': '미래환경펀드', 'account': '펀드',
+         'investment_type': 'RCPS', 'investment_date': '2023-08-20', 'amount': 25.0, 'current_value': 25.0,
+         'shares': 25000, 'price_per_share': 10000, 'valuation': 180.0, 'ownership': 13.9, 'status': 'active',
+         'milestone': '매출 성장 중', 'next_event': '2025 Q3 IPO 추진'},
+        {'id': 3, 'company': '클린워터', 'sector': '수처리', 'fund': '미래환경펀드', 'account': '펀드',
+         'investment_type': 'CB', 'investment_date': '2023-09-10', 'amount': 20.0, 'current_value': 20.0,
+         'shares': 0, 'price_per_share': 0, 'valuation': 120.0, 'ownership': 0, 'status': 'active',
+         'milestone': '전환권 보유', 'next_event': '2025 Q4 전환 검토', 'coupon': 3.0, 'conversion_price': 8000},
+        {'id': 4, 'company': '바이오매스에너지', 'sector': '신재생에너지', 'fund': '미래환경펀드', 'account': '펀드',
+         'investment_type': 'RCPS', 'investment_date': '2023-11-05', 'amount': 35.0, 'current_value': 35.0,
+         'shares': 35000, 'price_per_share': 10000, 'valuation': 200.0, 'ownership': 17.5, 'status': 'active',
+         'milestone': '발전소 가동 개시', 'next_event': '2025 Q1 BEP 달성'},
+        {'id': 5, 'company': '스마트그리드', 'sector': '에너지IT', 'fund': '미래환경펀드', 'account': '펀드',
+         'investment_type': 'RCPS', 'investment_date': '2024-01-20', 'amount': 40.0, 'current_value': 40.0,
+         'shares': 40000, 'price_per_share': 10000, 'valuation': 250.0, 'ownership': 16.0, 'status': 'active',
+         'milestone': '대기업 계약 체결', 'next_event': '2025 Q2 해외 진출'},
+        {'id': 6, 'company': '카본캡처', 'sector': 'CCUS', 'fund': '미래환경펀드', 'account': '펀드',
+         'investment_type': 'RCPS', 'investment_date': '2024-03-15', 'amount': 28.0, 'current_value': 28.0,
+         'shares': 28000, 'price_per_share': 10000, 'valuation': 140.0, 'ownership': 20.0, 'status': 'active',
+         'milestone': '파일럿 플랜트 완공', 'next_event': '2025 Q3 상용화'},
+        {'id': 7, 'company': '순환자원', 'sector': '자원순환', 'fund': '미래환경펀드', 'account': '펀드',
+         'investment_type': 'CB', 'investment_date': '2024-04-10', 'amount': 22.0, 'current_value': 22.0,
+         'shares': 0, 'price_per_share': 0, 'valuation': 100.0, 'ownership': 0, 'status': 'active',
+         'milestone': '신규 시설 증설', 'next_event': '2025 Q2 증설 완료', 'coupon': 2.5, 'conversion_price': 12000},
+        {'id': 8, 'company': 'ESG테크', 'sector': 'ESG/SaaS', 'fund': '미래환경펀드', 'account': '펀드',
+         'investment_type': '보통주', 'investment_date': '2024-05-25', 'amount': 15.0, 'current_value': 15.0,
+         'shares': 15000, 'price_per_share': 10000, 'valuation': 80.0, 'ownership': 18.75, 'status': 'active',
+         'milestone': 'MRR 10억 달성', 'next_event': '2025 Q3 Series A'},
+        {'id': 9, 'company': '수소에너지', 'sector': '수소', 'fund': '미래환경펀드', 'account': '펀드',
+         'investment_type': 'RCPS', 'investment_date': '2024-07-10', 'amount': 45.0, 'current_value': 45.0,
+         'shares': 45000, 'price_per_share': 10000, 'valuation': 300.0, 'ownership': 15.0, 'status': 'active',
+         'milestone': '충전소 10개 운영', 'next_event': '2025 Q4 전국 확대'},
+        {'id': 10, 'company': '태양광플러스', 'sector': '태양광', 'fund': '미래환경펀드', 'account': '펀드',
+         'investment_type': 'RCPS', 'investment_date': '2024-08-20', 'amount': 32.0, 'current_value': 32.0,
+         'shares': 32000, 'price_per_share': 10000, 'valuation': 160.0, 'ownership': 20.0, 'status': 'active',
+         'milestone': '100MW 발전 운영', 'next_event': '2025 Q2 ESS 연계'},
+        {'id': 11, 'company': '풍력발전', 'sector': '풍력', 'fund': '미래환경펀드', 'account': '펀드',
+         'investment_type': 'RCPS', 'investment_date': '2024-09-15', 'amount': 38.0, 'current_value': 38.0,
+         'shares': 38000, 'price_per_share': 10000, 'valuation': 220.0, 'ownership': 17.27, 'status': 'active',
+         'milestone': '해상풍력 인허가', 'next_event': '2026 Q1 착공'},
+        {'id': 12, 'company': '폐배터리리사이클', 'sector': '배터리재활용', 'fund': '미래환경펀드', 'account': '펀드',
+         'investment_type': 'RCPS', 'investment_date': '2024-10-30', 'amount': 30.18, 'current_value': 30.18,
+         'shares': 30180, 'price_per_share': 10000, 'valuation': 180.0, 'ownership': 16.77, 'status': 'active',
+         'milestone': '처리용량 확대', 'next_event': '2025 Q3 EU 수출'},
+        # 고유계정 투자
+        {'id': 13, 'company': '친환경모빌리티', 'sector': 'EV/모빌리티', 'fund': '고유계정', 'account': '고유',
+         'investment_type': 'RCPS', 'investment_date': '2024-02-10', 'amount': 0, 'current_value': 0,
+         'shares': 0, 'price_per_share': 0, 'valuation': 0, 'ownership': 0, 'status': 'committed',
+         'milestone': 'Due Diligence 완료', 'next_event': '투자 검토 중'},
+        {'id': 14, 'company': '그린빌딩', 'sector': '건설/에너지효율', 'fund': '고유계정', 'account': '고유',
+         'investment_type': 'CB', 'investment_date': '2024-03-20', 'amount': 0, 'current_value': 0,
+         'shares': 0, 'price_per_share': 0, 'valuation': 0, 'ownership': 0, 'status': 'committed',
+         'milestone': 'MOU 체결', 'next_event': '구조화 진행 중'},
+    ]
+
+def get_sector_allocation():
+    """섹터별 배분"""
+    portfolio = get_portfolio_data()
+    sector_data = {}
+    for p in portfolio:
+        if p['amount'] > 0:
+            sector = p['sector']
+            if sector not in sector_data:
+                sector_data[sector] = {'amount': 0, 'count': 0, 'companies': []}
+            sector_data[sector]['amount'] += p['amount']
+            sector_data[sector]['count'] += 1
+            sector_data[sector]['companies'].append(p['company'])
+    return sector_data
+
+def get_investment_type_allocation():
+    """투자유형별 배분"""
+    portfolio = get_portfolio_data()
+    type_data = {}
+    for p in portfolio:
+        if p['amount'] > 0:
+            inv_type = p['investment_type']
+            if inv_type not in type_data:
+                type_data[inv_type] = {'amount': 0, 'count': 0}
+            type_data[inv_type]['amount'] += p['amount']
+            type_data[inv_type]['count'] += 1
+    return type_data
+
 def render_portfolio():
-    """Portfolio 페이지"""
+    """Portfolio 페이지 - 완전 개발 버전"""
     st.markdown('<p class="section-title"><span class="icon">📈</span> 통합 포트폴리오 관리</p>', unsafe_allow_html=True)
     
-    st.markdown("""
-    <div class="info-box">
-        <p><strong>🚧 개발 중</strong><br>
-        포트폴리오 관리 기능이 곧 추가됩니다.<br>
-        - 투자 포트폴리오 현황<br>
-        - 수익률 추적<br>
-        - 리밸런싱 알림<br>
-        - 성과 분석 리포트</p>
-    </div>
-    """, unsafe_allow_html=True)
+    # 데이터 로드
+    funds = get_fund_data()
+    portfolio = get_portfolio_data()
     
-    # 샘플 포트폴리오 요약
-    col1, col2, col3 = st.columns(3)
+    # 핵심 지표 계산
+    total_aum = sum(f['aum'] for f in funds)
+    total_investments = len([p for p in portfolio if p['amount'] > 0])
+    total_invested = sum(p['amount'] for p in portfolio)
+    total_current_value = sum(p['current_value'] for p in portfolio)
+    fund_investments = len([p for p in portfolio if p['account'] == '펀드' and p['amount'] > 0])
+    proprietary_investments = len([p for p in portfolio if p['account'] == '고유'])
+    exits = len([p for p in portfolio if p['status'] == 'exited'])
+    moic = total_current_value / total_invested if total_invested > 0 else 0
+    
+    # =========================================================================
+    # 1. 핵심 KPI 대시보드
+    # =========================================================================
+    st.markdown("### 📊 핵심 KPI")
+    
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-label">총 운용자산</div>
-            <div class="metric-value large">1,250억</div>
-            <div class="metric-change up">▲ 5.2% YTD</div>
+        st.markdown(f"""
+        <div class="metric-card" style="border-left: 3px solid var(--accent-indigo);">
+            <div class="metric-label">총 운용자산 (AUM)</div>
+            <div class="metric-value large">{total_aum:,.1f}억</div>
+            <div style="color: var(--text-muted); font-size: 0.75rem; margin-top: 0.3rem;">
+                펀드 {len(funds)}개 운용 중
+            </div>
         </div>
         """, unsafe_allow_html=True)
     
     with col2:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-label">투자 건수</div>
-            <div class="metric-value large">23건</div>
-            <div class="metric-change neutral">- Active</div>
+        st.markdown(f"""
+        <div class="metric-card" style="border-left: 3px solid var(--accent-emerald);">
+            <div class="metric-label">총 투자집행</div>
+            <div class="metric-value large">{total_invested:,.2f}억</div>
+            <div style="color: var(--text-muted); font-size: 0.75rem; margin-top: 0.3rem;">
+                투자비율 {total_invested/total_aum*100:.1f}%
+            </div>
         </div>
         """, unsafe_allow_html=True)
     
     with col3:
-        st.markdown("""
-        <div class="metric-card">
-            <div class="metric-label">평균 IRR</div>
-            <div class="metric-value large">18.5%</div>
-            <div class="metric-change up">▲ 2.1%p</div>
+        st.markdown(f"""
+        <div class="metric-card" style="border-left: 3px solid var(--accent-amber);">
+            <div class="metric-label">총 투자 건수</div>
+            <div class="metric-value large">{total_investments}건</div>
+            <div style="color: var(--text-muted); font-size: 0.75rem; margin-top: 0.3rem;">
+                펀드 {fund_investments} / 고유 {proprietary_investments}
+            </div>
         </div>
         """, unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(f"""
+        <div class="metric-card" style="border-left: 3px solid var(--accent-violet);">
+            <div class="metric-label">미회수자산 가치</div>
+            <div class="metric-value large">{total_current_value:,.2f}억</div>
+            <div style="color: var(--text-muted); font-size: 0.75rem; margin-top: 0.3rem;">
+                MOIC {moic:.2f}x | 회수 {exits}건
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    
+    # =========================================================================
+    # 2. 탭 구조
+    # =========================================================================
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "🏦 펀드 현황", "💼 포트폴리오", "📊 분석", "📅 이벤트", "⚙️ 관리"
+    ])
+    
+    # =========================================================================
+    # Tab 1: 펀드 현황
+    # =========================================================================
+    with tab1:
+        st.markdown("### 🏦 운용 펀드 현황")
+        
+        for fund in funds:
+            # 펀드별 투자 건수 계산
+            fund_portfolio = [p for p in portfolio if p['fund'] == fund['name'] and p['amount'] > 0]
+            fund_invested = sum(p['amount'] for p in fund_portfolio)
+            
+            # 진행률 계산
+            deployment_ratio = fund_invested / fund['aum'] * 100 if fund['aum'] > 0 else 0
+            
+            # 상태 배지
+            status_class = 'emerald' if fund['status'] == 'active' else 'amber'
+            status_text = '운용중' if fund['status'] == 'active' else '대기'
+            
+            st.markdown(f"""
+            <div class="card" style="margin-bottom: 1rem;">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span class="badge badge-{status_class}" style="margin-right: 0.5rem;">{status_text}</span>
+                        {fund['name']}
+                    </div>
+                    <div class="card-badge">Vintage {fund['vintage']}</div>
+                </div>
+                <div style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1rem;">
+                    {fund['full_name']}
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem;">
+                    <div>
+                        <div style="color: var(--text-muted); font-size: 0.7rem;">약정총액</div>
+                        <div style="color: var(--text-primary); font-size: 1.1rem; font-weight: 600; font-family: 'JetBrains Mono';">{fund['aum']:,.1f}억</div>
+                    </div>
+                    <div>
+                        <div style="color: var(--text-muted); font-size: 0.7rem;">투자집행</div>
+                        <div style="color: var(--text-primary); font-size: 1.1rem; font-weight: 600; font-family: 'JetBrains Mono';">{fund_invested:,.2f}억</div>
+                    </div>
+                    <div>
+                        <div style="color: var(--text-muted); font-size: 0.7rem;">투자건수</div>
+                        <div style="color: var(--text-primary); font-size: 1.1rem; font-weight: 600; font-family: 'JetBrains Mono';">{len(fund_portfolio)}건</div>
+                    </div>
+                    <div>
+                        <div style="color: var(--text-muted); font-size: 0.7rem;">집행률</div>
+                        <div style="color: var(--accent-emerald); font-size: 1.1rem; font-weight: 600; font-family: 'JetBrains Mono';">{deployment_ratio:.1f}%</div>
+                    </div>
+                </div>
+                <div style="margin-top: 1rem;">
+                    <div style="background: var(--bg-secondary); border-radius: 4px; height: 8px; overflow: hidden;">
+                        <div style="background: var(--gradient-brand); height: 100%; width: {deployment_ratio}%; transition: width 0.3s;"></div>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 2rem; margin-top: 1rem; font-size: 0.8rem; color: var(--text-muted);">
+                    <span>📅 투자기간: {fund['investment_period']}</span>
+                    <span>🏢 GP: {', '.join(fund['gp'])}</span>
+                    <span>💰 LP: {fund['lp']}</span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # 잔여 투자여력
+        remaining = total_aum - total_invested
+        st.markdown(f"""
+        <div class="info-box">
+            <p><strong>💰 잔여 투자여력</strong><br>
+            총 약정 {total_aum:,.1f}억 - 투자집행 {total_invested:,.2f}억 = <strong style="color: var(--accent-emerald);">{remaining:,.2f}억</strong></p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # =========================================================================
+    # Tab 2: 포트폴리오 상세
+    # =========================================================================
+    with tab2:
+        st.markdown("### 💼 포트폴리오 상세 현황")
+        
+        # 필터
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            fund_filter = st.selectbox("펀드", ["전체"] + [f['name'] for f in funds] + ["고유계정"])
+        with col2:
+            type_filter = st.selectbox("투자유형", ["전체", "RCPS", "CB", "보통주"])
+        with col3:
+            status_filter = st.selectbox("상태", ["전체", "active", "committed", "exited"])
+        
+        # 필터 적용
+        filtered = portfolio
+        if fund_filter != "전체":
+            filtered = [p for p in filtered if p['fund'] == fund_filter]
+        if type_filter != "전체":
+            filtered = [p for p in filtered if p['investment_type'] == type_filter]
+        if status_filter != "전체":
+            filtered = [p for p in filtered if p['status'] == status_filter]
+        
+        st.markdown(f"**{len(filtered)}개** 투자건")
+        
+        # 포트폴리오 카드
+        for p in filtered:
+            if p['amount'] > 0:
+                type_class = {'RCPS': 'indigo', 'CB': 'amber', '보통주': 'emerald'}.get(p['investment_type'], 'sky')
+                status_class = {'active': 'emerald', 'committed': 'amber', 'exited': 'rose'}.get(p['status'], 'sky')
+                status_text = {'active': '투자중', 'committed': '검토중', 'exited': '회수완료'}.get(p['status'], p['status'])
+                
+                unrealized_gain = p['current_value'] - p['amount']
+                gain_class = 'up' if unrealized_gain >= 0 else 'down'
+                gain_arrow = '▲' if unrealized_gain >= 0 else '▼'
+                
+                st.markdown(f"""
+                <div class="card" style="margin-bottom: 0.75rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem;">
+                                <span class="badge badge-{type_class}">{p['investment_type']}</span>
+                                <span class="badge badge-{status_class}">{status_text}</span>
+                                <span style="color: var(--text-primary); font-size: 1.1rem; font-weight: 700;">{p['company']}</span>
+                            </div>
+                            <div style="color: var(--text-muted); font-size: 0.8rem;">
+                                {p['sector']} | {p['fund']} | {p['investment_date']}
+                            </div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: var(--text-primary); font-size: 1.2rem; font-weight: 700; font-family: 'JetBrains Mono';">
+                                {p['amount']:,.1f}억
+                            </div>
+                            <div class="metric-change {gain_class}" style="display: inline-block;">
+                                {gain_arrow} {abs(unrealized_gain):,.2f}억
+                            </div>
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.5rem; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-subtle);">
+                        <div>
+                            <div style="color: var(--text-muted); font-size: 0.65rem;">기업가치</div>
+                            <div style="color: var(--text-secondary); font-size: 0.85rem; font-family: 'JetBrains Mono';">{p['valuation']:,.0f}억</div>
+                        </div>
+                        <div>
+                            <div style="color: var(--text-muted); font-size: 0.65rem;">지분율</div>
+                            <div style="color: var(--text-secondary); font-size: 0.85rem; font-family: 'JetBrains Mono';">{p['ownership']:.1f}%</div>
+                        </div>
+                        <div>
+                            <div style="color: var(--text-muted); font-size: 0.65rem;">MOIC</div>
+                            <div style="color: var(--accent-emerald); font-size: 0.85rem; font-family: 'JetBrains Mono';">{p['current_value']/p['amount']:.2f}x</div>
+                        </div>
+                        <div>
+                            <div style="color: var(--text-muted); font-size: 0.65rem;">마일스톤</div>
+                            <div style="color: var(--text-secondary); font-size: 0.8rem;">{p['milestone']}</div>
+                        </div>
+                        <div>
+                            <div style="color: var(--text-muted); font-size: 0.65rem;">다음 이벤트</div>
+                            <div style="color: var(--accent-amber); font-size: 0.8rem;">{p['next_event']}</div>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                # 검토중 건
+                st.markdown(f"""
+                <div class="card" style="margin-bottom: 0.75rem; opacity: 0.7;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <span class="badge badge-amber">검토중</span>
+                                <span style="color: var(--text-primary); font-size: 1rem; font-weight: 600;">{p['company']}</span>
+                            </div>
+                            <div style="color: var(--text-muted); font-size: 0.8rem;">{p['sector']} | {p['fund']}</div>
+                        </div>
+                        <div style="color: var(--text-muted); font-size: 0.85rem;">{p['milestone']}</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+    
+    # =========================================================================
+    # Tab 3: 분석
+    # =========================================================================
+    with tab3:
+        st.markdown("### 📊 포트폴리오 분석")
+        
+        col1, col2 = st.columns(2)
+        
+        # 섹터별 배분
+        with col1:
+            st.markdown("#### 섹터별 배분")
+            sector_data = get_sector_allocation()
+            
+            # Pie Chart
+            fig_sector = go.Figure(data=[go.Pie(
+                labels=list(sector_data.keys()),
+                values=[d['amount'] for d in sector_data.values()],
+                hole=0.4,
+                marker_colors=['#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', 
+                               '#10b981', '#14b8a6', '#06b6d4', '#0ea5e9', '#3b82f6', '#f59e0b', '#ef4444'],
+                textposition='inside',
+                textinfo='percent+label'
+            )])
+            fig_sector.update_layout(
+                showlegend=False,
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                height=300,
+                margin=dict(t=30, b=30, l=30, r=30)
+            )
+            st.plotly_chart(fig_sector, use_container_width=True)
+            
+            # 섹터 상세
+            for sector, data in sorted(sector_data.items(), key=lambda x: x[1]['amount'], reverse=True):
+                pct = data['amount'] / total_invested * 100
+                st.markdown(f"""
+                <div class="data-row">
+                    <div class="data-row-left">
+                        <div class="data-row-title">{sector}</div>
+                        <div class="data-row-subtitle">{data['count']}건</div>
+                    </div>
+                    <div class="data-row-value">{data['amount']:,.1f}억 ({pct:.1f}%)</div>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # 투자유형별 배분
+        with col2:
+            st.markdown("#### 투자유형별 배분")
+            type_data = get_investment_type_allocation()
+            
+            # Bar Chart
+            fig_type = go.Figure(data=[go.Bar(
+                x=list(type_data.keys()),
+                y=[d['amount'] for d in type_data.values()],
+                marker_color=['#6366f1', '#f59e0b', '#10b981'],
+                text=[f"{d['amount']:.1f}억" for d in type_data.values()],
+                textposition='outside'
+            )])
+            fig_type.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                height=300,
+                xaxis=dict(showgrid=False, color='#a1a1aa'),
+                yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)', color='#a1a1aa'),
+                margin=dict(t=50, b=30, l=30, r=30)
+            )
+            st.plotly_chart(fig_type, use_container_width=True)
+            
+            # 투자유형 상세
+            type_colors = {'RCPS': 'indigo', 'CB': 'amber', '보통주': 'emerald'}
+            for inv_type, data in sorted(type_data.items(), key=lambda x: x[1]['amount'], reverse=True):
+                pct = data['amount'] / total_invested * 100
+                st.markdown(f"""
+                <div class="data-row">
+                    <div class="data-row-left">
+                        <div class="data-row-title">
+                            <span class="badge badge-{type_colors.get(inv_type, 'sky')}">{inv_type}</span>
+                        </div>
+                        <div class="data-row-subtitle">{data['count']}건</div>
+                    </div>
+                    <div class="data-row-value">{data['amount']:,.1f}억 ({pct:.1f}%)</div>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Vintage 분석
+        st.markdown("#### 📅 Vintage별 투자 현황")
+        
+        vintage_data = {}
+        for p in portfolio:
+            if p['amount'] > 0:
+                year = p['investment_date'][:4]
+                if year not in vintage_data:
+                    vintage_data[year] = {'amount': 0, 'count': 0, 'current': 0}
+                vintage_data[year]['amount'] += p['amount']
+                vintage_data[year]['count'] += 1
+                vintage_data[year]['current'] += p['current_value']
+        
+        fig_vintage = go.Figure()
+        years = sorted(vintage_data.keys())
+        
+        fig_vintage.add_trace(go.Bar(
+            name='투자금액',
+            x=years,
+            y=[vintage_data[y]['amount'] for y in years],
+            marker_color='#6366f1'
+        ))
+        fig_vintage.add_trace(go.Bar(
+            name='현재가치',
+            x=years,
+            y=[vintage_data[y]['current'] for y in years],
+            marker_color='#10b981'
+        ))
+        
+        fig_vintage.update_layout(
+            barmode='group',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            height=300,
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+            xaxis=dict(showgrid=False, color='#a1a1aa'),
+            yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)', color='#a1a1aa', title='억원'),
+            margin=dict(t=50, b=30, l=50, r=30)
+        )
+        st.plotly_chart(fig_vintage, use_container_width=True)
+    
+    # =========================================================================
+    # Tab 4: 이벤트 캘린더
+    # =========================================================================
+    with tab4:
+        st.markdown("### 📅 주요 이벤트 캘린더")
+        
+        # 이벤트 추출 및 정렬
+        events = []
+        for p in portfolio:
+            if p['amount'] > 0 and p['next_event']:
+                events.append({
+                    'company': p['company'],
+                    'event': p['next_event'],
+                    'milestone': p['milestone'],
+                    'amount': p['amount'],
+                    'type': p['investment_type']
+                })
+        
+        # 분기별 그룹핑
+        st.markdown("#### 🗓️ 2025년 예정 이벤트")
+        
+        quarters = {
+            'Q1 (1-3월)': [e for e in events if 'Q1' in e['event']],
+            'Q2 (4-6월)': [e for e in events if 'Q2' in e['event']],
+            'Q3 (7-9월)': [e for e in events if 'Q3' in e['event']],
+            'Q4 (10-12월)': [e for e in events if 'Q4' in e['event']],
+            '2026년 이후': [e for e in events if '2026' in e['event']]
+        }
+        
+        for quarter, quarter_events in quarters.items():
+            if quarter_events:
+                st.markdown(f"##### {quarter}")
+                for e in quarter_events:
+                    type_class = {'RCPS': 'indigo', 'CB': 'amber', '보통주': 'emerald'}.get(e['type'], 'sky')
+                    st.markdown(f"""
+                    <div class="data-row">
+                        <div class="data-row-left">
+                            <div class="data-row-title">
+                                <span class="badge badge-{type_class}">{e['type']}</span>
+                                {e['company']}
+                            </div>
+                            <div class="data-row-subtitle">{e['event']}</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: var(--text-primary); font-weight: 600;">{e['amount']:,.1f}억</div>
+                            <div style="color: var(--text-muted); font-size: 0.75rem;">{e['milestone']}</div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # 회수 파이프라인
+        st.markdown("#### 🎯 Exit 파이프라인")
+        
+        exit_candidates = [p for p in portfolio if p['amount'] > 0 and ('IPO' in p['next_event'] or 'Series' in p['next_event'])]
+        
+        if exit_candidates:
+            for p in exit_candidates:
+                potential_return = p['valuation'] * (p['ownership'] / 100)
+                moic = potential_return / p['amount'] if p['amount'] > 0 else 0
+                
+                st.markdown(f"""
+                <div class="card" style="margin-bottom: 0.75rem; border-left: 3px solid var(--accent-emerald);">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div style="color: var(--text-primary); font-weight: 700; font-size: 1rem;">{p['company']}</div>
+                            <div style="color: var(--text-muted); font-size: 0.8rem;">{p['next_event']}</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: var(--accent-emerald); font-size: 1.1rem; font-weight: 700;">
+                                {potential_return:,.1f}억 예상
+                            </div>
+                            <div style="color: var(--text-muted); font-size: 0.8rem;">
+                                투자 {p['amount']:,.1f}억 → {moic:.1f}x MOIC
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+        else:
+            st.info("현재 Exit 예정 건이 없습니다.")
+    
+    # =========================================================================
+    # Tab 5: 관리
+    # =========================================================================
+    with tab5:
+        st.markdown("### ⚙️ 포트폴리오 관리")
+        
+        # 신규 투자 등록
+        st.markdown("#### ➕ 신규 투자 등록")
+        
+        with st.form("new_investment"):
+            col1, col2 = st.columns(2)
+            with col1:
+                new_company = st.text_input("회사명")
+                new_sector = st.selectbox("섹터", ["환경/폐기물", "신재생에너지", "수처리", "CCUS", "자원순환", 
+                                                   "ESG/SaaS", "수소", "태양광", "풍력", "배터리재활용", "에너지IT", "EV/모빌리티", "기타"])
+                new_fund = st.selectbox("펀드", ["미래환경펀드", "IPO 일반사모 1호", "고유계정"])
+            with col2:
+                new_type = st.selectbox("투자유형", ["RCPS", "CB", "보통주"])
+                new_amount = st.number_input("투자금액 (억원)", 0.0, 100.0, 10.0, 1.0)
+                new_date = st.date_input("투자일")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                new_valuation = st.number_input("기업가치 (억원)", 0.0, 1000.0, 50.0, 10.0)
+            with col2:
+                new_ownership = st.number_input("지분율 (%)", 0.0, 100.0, 10.0, 1.0)
+            
+            submitted = st.form_submit_button("📝 등록", use_container_width=True)
+            if submitted:
+                st.success(f"✅ {new_company} 투자건이 등록되었습니다. (실제 저장은 DB 연동 필요)")
+        
+        st.markdown("---")
+        
+        # 가치평가 업데이트
+        st.markdown("#### 📊 가치평가 일괄 업데이트")
+        
+        active_portfolio = [p for p in portfolio if p['amount'] > 0]
+        
+        update_data = []
+        for p in active_portfolio:
+            update_data.append({
+                'ID': p['id'],
+                '회사': p['company'],
+                '투자금액': p['amount'],
+                '현재가치': p['current_value'],
+                '기업가치': p['valuation'],
+                'MOIC': round(p['current_value'] / p['amount'], 2) if p['amount'] > 0 else 0
+            })
+        
+        df_update = pd.DataFrame(update_data)
+        edited_df = st.data_editor(
+            df_update,
+            column_config={
+                "ID": st.column_config.NumberColumn("ID", disabled=True),
+                "회사": st.column_config.TextColumn("회사", disabled=True),
+                "투자금액": st.column_config.NumberColumn("투자금액", disabled=True, format="%.1f억"),
+                "현재가치": st.column_config.NumberColumn("현재가치 (수정가능)", format="%.2f억"),
+                "기업가치": st.column_config.NumberColumn("기업가치 (수정가능)", format="%.0f억"),
+                "MOIC": st.column_config.NumberColumn("MOIC", disabled=True, format="%.2fx")
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        if st.button("💾 가치평가 저장", use_container_width=True):
+            st.success("✅ 가치평가가 업데이트되었습니다. (실제 저장은 DB 연동 필요)")
+        
+        st.markdown("---")
+        
+        # 데이터 내보내기
+        st.markdown("#### 📥 데이터 내보내기")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            portfolio_df = pd.DataFrame(portfolio)
+            csv = portfolio_df.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                "📊 포트폴리오 CSV",
+                csv,
+                f"ifam_portfolio_{datetime.now().strftime('%Y%m%d')}.csv",
+                "text/csv",
+                use_container_width=True
+            )
+        with col2:
+            fund_df = pd.DataFrame(funds)
+            csv_fund = fund_df.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                "🏦 펀드현황 CSV",
+                csv_fund,
+                f"ifam_funds_{datetime.now().strftime('%Y%m%d')}.csv",
+                "text/csv",
+                use_container_width=True
+            )
 
 # =============================================================================
 # 메인 앱
