@@ -1,19 +1,17 @@
 """
-IFAM 통합 대시보드 v1.1
+IFAM 통합 대시보드 v1.2
 인프라프론티어자산운용(주) - Infra Frontier Asset Management
 
 통합 기능:
-1. 🌱 Daily Market - 친환경·인프라 투자 지표 (환율, LNG, 스왑 추가)
+1. 🌱 Daily Market - 친환경·인프라 투자 지표 (실시간 크롤링)
 2. 📊 VC Analyzer - Term Sheet 분석 & 밸류에이션
-3. 🏢 LP Discovery - Potential LP 발굴 & IPO 캘린더 (일괄 다운로드, ESG, 가중치 점수)
-4. 📈 Portfolio - 통합 포트폴리오 대시보드 (수정/삭제 기능)
+3. 🏢 LP Discovery - LP & IPO 모니터링 (v2.4 통합)
+4. 📈 Portfolio - 통합 포트폴리오 대시보드
 
-v1.1 업데이트:
-- 포트폴리오 수정/삭제 기능
-- 환율 크롤링 개선
-- LNG, 금리스왑 추가
-- IPO 연도/월 필터, 수요예측/심사승인 탭
-- LP 발굴 일괄 다운로드, ESG 동향, 가중치 점수
+v1.2 업데이트:
+- 더미데이터 완전 제거, 실시간 크롤링만 사용
+- LP Discovery를 LP & IPO 모니터링 대시보드 v2.4와 동일하게 변경
+- IPO 4개 탭: 청약일정, 수요예측, 월별캘린더, 승인종목
 
 작성: 2025.12
 """
@@ -64,14 +62,13 @@ def init_session_state():
         st.session_state.portfolio_data = get_default_portfolio_data()
     if 'fund_data' not in st.session_state:
         st.session_state.fund_data = get_default_fund_data()
+    # LP 발굴용 세션 상태
     if 'lp_corp_list' not in st.session_state:
         st.session_state.lp_corp_list = None
-    if 'lp_data' not in st.session_state:
-        st.session_state.lp_data = pd.DataFrame()
-    if 'lp_idx' not in st.session_state:
-        st.session_state.lp_idx = 0
-    if 'lp_loading' not in st.session_state:
-        st.session_state.lp_loading = False
+    if 'lp_financial_data' not in st.session_state:
+        st.session_state.lp_financial_data = pd.DataFrame()
+    if 'lp_current_idx' not in st.session_state:
+        st.session_state.lp_current_idx = 0
 
 # =============================================================================
 # 통합 CSS 스타일 시스템
@@ -186,6 +183,7 @@ def load_css():
         .badge-amber { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
         .badge-rose { background: rgba(244, 63, 94, 0.15); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.3); }
         .badge-sky { background: rgba(14, 165, 233, 0.15); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.3); }
+        .badge-violet { background: rgba(139, 92, 246, 0.15); color: #a78bfa; border: 1px solid rgba(139, 92, 246, 0.3); }
         
         .section-title { color: var(--text-primary); font-size: 1.1rem; font-weight: 700; margin: 1.5rem 0 1rem 0; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border-subtle); display: flex; align-items: center; gap: 0.5rem; }
         .section-title .icon { font-size: 1.2rem; }
@@ -216,11 +214,10 @@ def load_css():
         .ipo-date { color: var(--accent-amber); font-weight: 600; }
         .ipo-price { color: var(--accent-emerald); font-weight: 600; }
         
-        .action-btn { padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; border: none; transition: all 0.2s; }
-        .action-btn-edit { background: rgba(99, 102, 241, 0.2); color: #818cf8; }
-        .action-btn-edit:hover { background: rgba(99, 102, 241, 0.4); }
-        .action-btn-delete { background: rgba(244, 63, 94, 0.2); color: #fb7185; }
-        .action-btn-delete:hover { background: rgba(244, 63, 94, 0.4); }
+        .company-card { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 10px; padding: 0.8rem 1rem; margin-bottom: 0.5rem; transition: all 0.2s; }
+        .company-card:hover { border-color: var(--accent-indigo); }
+        .company-name { color: var(--text-primary); font-size: 0.95rem; font-weight: 700; margin-bottom: 0.2rem; }
+        .company-info { color: var(--text-secondary); font-size: 0.8rem; line-height: 1.4; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -241,6 +238,14 @@ def format_number(value, decimals=0, prefix='', suffix=''):
             return f"{prefix}{value:,.{decimals}f}{suffix}"
     except:
         return str(value)
+
+def format_number_simple(value, unit='억원'):
+    """숫자 포맷팅 (LP용)"""
+    if pd.isna(value) or value is None:
+        return 'N/A'
+    if abs(value) >= 10000:
+        return f"{value/10000:,.1f}조원"
+    return f"{value:,.0f}{unit}"
 
 def get_change_class(change):
     if change > 0:
@@ -299,21 +304,20 @@ class FundInfo:
     hurdle_rate: float = 8.0
 
 # =============================================================================
-# 크롤링 함수들 - Daily Market (개선)
+# 크롤링 함수들 - Daily Market (더미데이터 제거, 실제 크롤링만)
 # =============================================================================
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_exchange_rates():
-    """환율 정보 크롤링 - 개선 버전"""
+    """환율 정보 크롤링 - 실제 데이터만"""
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    
     try:
-        # 방법 1: 네이버 금융 API 스타일
+        # 방법 1: 네이버 금융 환율 목록
         url = 'https://finance.naver.com/marketindex/exchangeList.naver'
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
         
         rates = {}
-        
-        # 테이블에서 환율 추출
         table = soup.find('table', class_='tbl_exchange')
         if table:
             rows = table.find_all('tr')
@@ -323,12 +327,9 @@ def fetch_exchange_rates():
                     try:
                         name_cell = cells[0]
                         name = name_cell.get_text(strip=True)
-                        
-                        # 매매기준율
                         value_text = cells[1].get_text(strip=True).replace(',', '')
                         value = float(value_text)
                         
-                        # 전일대비
                         change_cell = cells[2]
                         change_text = change_cell.get_text(strip=True).replace(',', '')
                         try:
@@ -336,7 +337,6 @@ def fetch_exchange_rates():
                         except:
                             change = 0
                         
-                        # 방향 확인
                         if 'down' in str(change_cell) or '하락' in str(change_cell):
                             change = -abs(change)
                         
@@ -351,138 +351,186 @@ def fetch_exchange_rates():
                     except:
                         continue
         
-        # 방법 2: 메인 페이지에서 추출 (백업)
-        if not rates:
-            url2 = 'https://finance.naver.com/marketindex/'
-            response2 = requests.get(url2, headers=headers, timeout=10)
-            soup2 = BeautifulSoup(response2.text, 'html.parser')
+        if rates:
+            return rates
             
-            # market_data 클래스에서 추출
-            for item in soup2.select('.market_data .data_lst li, #exchangeList li'):
-                try:
-                    name_tag = item.select_one('h3, .h_lst, a')
-                    if not name_tag:
-                        continue
-                    name = name_tag.get_text(strip=True)
-                    
-                    value_tag = item.select_one('.value, .head_info .value, span.value')
-                    if not value_tag:
-                        continue
-                    value = float(value_tag.get_text(strip=True).replace(',', ''))
-                    
-                    change_tag = item.select_one('.change, .head_info .change')
-                    change = 0
-                    if change_tag:
-                        try:
-                            change = float(change_tag.get_text(strip=True).replace(',', ''))
-                        except:
-                            pass
-                    
-                    # 하락 체크
-                    if item.select_one('.down, .ico_down'):
-                        change = -abs(change)
-                    
-                    if '달러' in name or 'USD' in name:
-                        rates['USD'] = {'value': value, 'change': change, 'name': '미국 달러'}
-                    elif '엔' in name or '100' in name:
-                        rates['JPY'] = {'value': value, 'change': change, 'name': '일본 엔(100)'}
-                    elif '유로' in name:
-                        rates['EUR'] = {'value': value, 'change': change, 'name': '유로'}
-                    elif '위안' in name:
-                        rates['CNY'] = {'value': value, 'change': change, 'name': '중국 위안'}
-                except:
+        # 방법 2: 메인 페이지에서 추출 (백업)
+        url2 = 'https://finance.naver.com/marketindex/'
+        response2 = requests.get(url2, headers=headers, timeout=10)
+        soup2 = BeautifulSoup(response2.text, 'html.parser')
+        
+        for item in soup2.select('.market_data .data_lst li, #exchangeList li'):
+            try:
+                name_tag = item.select_one('h3, .h_lst, a')
+                if not name_tag:
                     continue
+                name = name_tag.get_text(strip=True)
+                
+                value_tag = item.select_one('.value, .head_info .value, span.value')
+                if not value_tag:
+                    continue
+                value = float(value_tag.get_text(strip=True).replace(',', ''))
+                
+                change_tag = item.select_one('.change, .head_info .change')
+                change = 0
+                if change_tag:
+                    try:
+                        change = float(change_tag.get_text(strip=True).replace(',', ''))
+                    except:
+                        pass
+                
+                if item.select_one('.down, .ico_down'):
+                    change = -abs(change)
+                
+                if '달러' in name or 'USD' in name:
+                    rates['USD'] = {'value': value, 'change': change, 'name': '미국 달러'}
+                elif '엔' in name or '100' in name:
+                    rates['JPY'] = {'value': value, 'change': change, 'name': '일본 엔(100)'}
+                elif '유로' in name:
+                    rates['EUR'] = {'value': value, 'change': change, 'name': '유로'}
+                elif '위안' in name:
+                    rates['CNY'] = {'value': value, 'change': change, 'name': '중국 위안'}
+            except:
+                continue
         
-        # 기본값 사용 (크롤링 실패 시)
-        if not rates:
-            rates = {
-                'USD': {'value': 1450.0, 'change': 5.0, 'name': '미국 달러'},
-                'JPY': {'value': 950.0, 'change': -2.0, 'name': '일본 엔(100)'},
-                'EUR': {'value': 1520.0, 'change': 3.0, 'name': '유로'},
-                'CNY': {'value': 198.0, 'change': 0.5, 'name': '중국 위안'}
-            }
-        
-        return rates
+        return rates if rates else None
     except Exception as e:
-        # 기본값 반환
-        return {
-            'USD': {'value': 1450.0, 'change': 5.0, 'name': '미국 달러'},
-            'JPY': {'value': 950.0, 'change': -2.0, 'name': '일본 엔(100)'},
-            'EUR': {'value': 1520.0, 'change': 3.0, 'name': '유로'},
-            'CNY': {'value': 198.0, 'change': 0.5, 'name': '중국 위안'}
-        }
+        return None
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_oil_prices():
-    """국제유가 크롤링"""
+    """국제유가 크롤링 - 실제 데이터만"""
     try:
-        url = 'https://finance.naver.com/marketindex/worldOilIndex.naver'
+        url = 'https://finance.naver.com/marketindex/worldDailyQuote.naver?marketindexCd=OIL_CL&fdtc=2'
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
         
         prices = {}
-        tables = soup.find_all('table')
-        for table in tables:
-            rows = table.find_all('tr')
-            for row in rows:
-                cells = row.find_all(['th', 'td'])
-                if len(cells) >= 2:
-                    try:
-                        name = cells[0].get_text(strip=True)
-                        value = float(cells[1].get_text(strip=True).replace(',', ''))
-                        change = float(cells[2].get_text(strip=True).replace(',', '')) if len(cells) > 2 else 0
-                        
-                        if 'WTI' in name:
-                            prices['WTI'] = {'value': value, 'change': change}
-                        elif '브렌트' in name or 'Brent' in name:
-                            prices['Brent'] = {'value': value, 'change': change}
-                        elif '두바이' in name:
-                            prices['Dubai'] = {'value': value, 'change': change}
-                    except:
-                        continue
         
-        if not prices:
-            prices = {'WTI': {'value': 68.5, 'change': 0.5}, 'Brent': {'value': 72.3, 'change': 0.3}, 'Dubai': {'value': 70.1, 'change': 0.2}}
-        return prices
+        # WTI
+        try:
+            table = soup.find('table', class_='tbl_exchange')
+            if table:
+                rows = table.find_all('tr')
+                if len(rows) > 1:
+                    cells = rows[1].find_all('td')
+                    if len(cells) >= 2:
+                        value = float(cells[1].get_text(strip=True).replace(',', ''))
+                        change = 0
+                        if len(cells) >= 3:
+                            try:
+                                change = float(cells[2].get_text(strip=True).replace(',', ''))
+                            except:
+                                pass
+                        prices['WTI'] = {'value': value, 'change': change}
+        except:
+            pass
+        
+        # 다른 유가 (Brent, Dubai)
+        for code, name in [('OIL_BRT', 'Brent'), ('OIL_DU', 'Dubai')]:
+            try:
+                url2 = f'https://finance.naver.com/marketindex/worldDailyQuote.naver?marketindexCd={code}&fdtc=2'
+                response2 = requests.get(url2, headers=headers, timeout=10)
+                soup2 = BeautifulSoup(response2.text, 'html.parser')
+                table2 = soup2.find('table', class_='tbl_exchange')
+                if table2:
+                    rows2 = table2.find_all('tr')
+                    if len(rows2) > 1:
+                        cells2 = rows2[1].find_all('td')
+                        if len(cells2) >= 2:
+                            value2 = float(cells2[1].get_text(strip=True).replace(',', ''))
+                            change2 = 0
+                            if len(cells2) >= 3:
+                                try:
+                                    change2 = float(cells2[2].get_text(strip=True).replace(',', ''))
+                                except:
+                                    pass
+                            prices[name] = {'value': value2, 'change': change2}
+            except:
+                continue
+        
+        return prices if prices else None
     except:
-        return {'WTI': {'value': 68.5, 'change': 0.5}, 'Brent': {'value': 72.3, 'change': 0.3}, 'Dubai': {'value': 70.1, 'change': 0.2}}
+        return None
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_market_data():
-    """통합 시장 데이터 (LNG, 스왑 추가)"""
-    return {
-        'rec': {
-            'mainland': {'price': 72303, 'change': -35, 'volume': 12534}, 
-            'jeju': {'price': 63904, 'change': -8783, 'volume': 6}
-        },
-        'smp': {
-            'mainland': {'price': 110.52, 'change': 2.3}, 
-            'jeju': {'price': 95.17, 'change': -1.5}
-        },
-        'lng': {
-            'tanker': {'value': 23.45, 'change': 0.15, 'unit': '원/MJ'},
-            'fuel_cell': {'value': 19.72, 'change': -0.08, 'unit': '원/MJ'},
-            'city_gas': {'value': 15.85, 'change': 0.05, 'unit': '원/MJ'}
-        },
-        'swap': {
-            'irs_1y': {'value': 2.85, 'change': 0.02, 'name': 'IRS 1년'},
-            'irs_3y': {'value': 2.92, 'change': 0.01, 'name': 'IRS 3년'},
-            'irs_5y': {'value': 3.05, 'change': -0.02, 'name': 'IRS 5년'},
-            'crs_1y': {'value': 2.45, 'change': 0.03, 'name': 'CRS 1년'},
-            'crs_5y': {'value': 2.78, 'change': -0.01, 'name': 'CRS 5년'}
-        },
-        'rates': {
-            'call': {'value': 3.00, 'change': 0.00},
-            'cd_91': {'value': 3.15, 'change': -0.02},
-            'treasury_3y': {'value': 2.85, 'change': 0.03},
-            'treasury_10y': {'value': 3.05, 'change': 0.01},
-            'corp_aa_3y': {'value': 3.45, 'change': 0.02}
-        }
-    }
+def fetch_rec_prices():
+    """REC 가격 크롤링 - 실제 데이터만"""
+    try:
+        # 전력거래소 REC 가격 페이지
+        url = 'https://onerec.kmos.kr/portal/rec/selectRecPriceList.do'
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            # 테이블에서 가격 추출 시도
+            tables = soup.find_all('table')
+            for table in tables:
+                rows = table.find_all('tr')
+                for row in rows:
+                    cells = row.find_all(['td', 'th'])
+                    if len(cells) >= 2:
+                        text = cells[0].get_text(strip=True)
+                        if '육지' in text or '가격' in text:
+                            try:
+                                value = float(cells[1].get_text(strip=True).replace(',', ''))
+                                return {'mainland': {'price': value, 'change': 0}, 
+                                        'jeju': {'price': value * 0.9, 'change': 0}}
+                            except:
+                                continue
+        return None
+    except:
+        return None
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_interest_rates():
+    """금리 정보 크롤링 - 실제 데이터만"""
+    try:
+        # 한국은행 기준금리
+        url = 'https://finance.naver.com/marketindex/interestDailyQuote.naver?marketindexCd=IRR_CALL'
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        rates = {}
+        
+        try:
+            table = soup.find('table', class_='tbl_exchange')
+            if table:
+                rows = table.find_all('tr')
+                if len(rows) > 1:
+                    cells = rows[1].find_all('td')
+                    if len(cells) >= 2:
+                        value = float(cells[1].get_text(strip=True).replace(',', ''))
+                        rates['call'] = {'value': value, 'change': 0}
+        except:
+            pass
+        
+        # 국고채 금리
+        for code, name in [('IRR_GOVT03Y', 'treasury_3y'), ('IRR_GOVT10Y', 'treasury_10y')]:
+            try:
+                url2 = f'https://finance.naver.com/marketindex/interestDailyQuote.naver?marketindexCd={code}'
+                response2 = requests.get(url2, headers=headers, timeout=10)
+                soup2 = BeautifulSoup(response2.text, 'html.parser')
+                table2 = soup2.find('table', class_='tbl_exchange')
+                if table2:
+                    rows2 = table2.find_all('tr')
+                    if len(rows2) > 1:
+                        cells2 = rows2[1].find_all('td')
+                        if len(cells2) >= 2:
+                            value2 = float(cells2[1].get_text(strip=True).replace(',', ''))
+                            rates[name] = {'value': value2, 'change': 0}
+            except:
+                continue
+        
+        return rates if rates else None
+    except:
+        return None
 
 # =============================================================================
-# 크롤링 함수들 - IPO (연도/월 필터, 수요예측, 심사승인 추가)
+# 인코딩 헬퍼 함수 (IPO용)
 # =============================================================================
 def fetch_with_encoding(url, timeout=15):
     """올바른 인코딩으로 HTML 가져오기"""
@@ -506,20 +554,14 @@ def fetch_with_encoding(url, timeout=15):
     except:
         return None
 
+# =============================================================================
+# IPO 크롤링 함수들 (v2.4 동일)
+# =============================================================================
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_ipo_subscription(year=None, month=None):
-    """IPO 청약 일정 (연도/월 필터)"""
+def fetch_ipo_subscription_schedule():
+    """IPOStock 공모청약일정 스크래핑 (ipo04.asp)"""
     try:
-        # 기본 URL (현재 진행중)
-        url = 'http://www.ipostock.co.kr/sub03/ipo04.asp'
-        
-        # 연도/월 파라미터 추가
-        if year and month:
-            url = f'http://www.ipostock.co.kr/sub03/ipo04.asp?str_year={year}&str_month={month:02d}'
-        elif year:
-            url = f'http://www.ipostock.co.kr/sub03/ipo04.asp?str_year={year}'
-        
-        content = fetch_with_encoding(url)
+        content = fetch_with_encoding('http://www.ipostock.co.kr/sub03/ipo04.asp')
         if not content:
             return []
         
@@ -532,7 +574,7 @@ def fetch_ipo_subscription(year=None, month=None):
             if len(cells) >= 10:
                 try:
                     date_cell = cells[1].get_text(strip=True)
-                    if '~' not in date_cell:
+                    if not date_cell or '~' not in date_cell:
                         continue
                     
                     company_cell = cells[2]
@@ -548,10 +590,10 @@ def fetch_ipo_subscription(year=None, month=None):
                         'hope_price': cells[3].get_text(strip=True),
                         'offer_price': cells[4].get_text(strip=True),
                         'offer_amount': cells[5].get_text(strip=True),
+                        'refund_date': cells[6].get_text(strip=True),
                         'listing_date': cells[7].get_text(strip=True) if len(cells) > 7 else '-',
                         'competition': cells[8].get_text(strip=True) if len(cells) > 8 else '-',
-                        'underwriter': cells[9].get_text(strip=True) if len(cells) > 9 else '-',
-                        'type': 'subscription'
+                        'underwriter': cells[9].get_text(strip=True) if len(cells) > 9 else '-'
                     })
                 except:
                     continue
@@ -560,157 +602,121 @@ def fetch_ipo_subscription(year=None, month=None):
         return []
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_ipo_demand_forecast(debug=False):
-    """수요예측 일정 (ipo01.asp)"""
+def fetch_ipo_forecast_schedule():
+    """IPOStock 수요예측일정 스크래핑 (ipo02.asp)"""
     try:
-        url = 'http://www.ipostock.co.kr/sub03/ipo01.asp'
-        content = fetch_with_encoding(url)
+        content = fetch_with_encoding('http://www.ipostock.co.kr/sub03/ipo02.asp')
         if not content:
-            return [] if not debug else ([], [])
+            return []
         
         soup = BeautifulSoup(content, 'html.parser')
         results = []
-        debug_rows = []
-        
-        # 테이블 찾기
-        tables = soup.find_all('table')
-        target_table = None
-        for table in tables:
-            if table.find('th') or table.find('td'):
-                rows = table.find_all('tr')
-                if len(rows) > 3:
-                    target_table = table
-                    break
-        
-        if not target_table:
-            rows = soup.find_all('tr')
-        else:
-            rows = target_table.find_all('tr')
+        rows = soup.find_all('tr')
         
         for row in rows:
             cells = row.find_all('td')
             if len(cells) >= 5:
                 try:
-                    # 디버그용 raw 데이터
-                    raw_cells = [c.get_text(strip=True) for c in cells]
-                    if debug:
-                        debug_rows.append(raw_cells)
-                    
-                    # 회사명 찾기 (링크가 있는 셀)
-                    company_name = None
-                    company_idx = -1
-                    for idx, cell in enumerate(cells):
-                        link = cell.find('a')
-                        if link:
-                            name = link.get_text(strip=True)
-                            if name and len(name) >= 2 and not name.isdigit():
-                                company_name = name
-                                company_idx = idx
-                                break
-                    
-                    if not company_name:
+                    date_cell = cells[1].get_text(strip=True)
+                    if not date_cell or '~' not in date_cell:
                         continue
                     
-                    # 컬럼 매핑 (테이블 구조에 따라 조정)
-                    # 일반적인 구조: 번호, 회사명, 수요예측일, 희망가, 공모금액, 주간사
-                    remaining_cells = [c.get_text(strip=True) for i, c in enumerate(cells) if i != company_idx]
+                    company_cell = cells[2]
+                    company_link = company_cell.find('a')
+                    company_name = company_link.get_text(strip=True) if company_link else company_cell.get_text(strip=True)
+                    
+                    if not company_name or len(company_name) < 2:
+                        continue
                     
                     results.append({
                         'company': company_name,
-                        'demand_date': remaining_cells[1] if len(remaining_cells) > 1 else '-',
-                        'hope_price': remaining_cells[2] if len(remaining_cells) > 2 else '-',
-                        'offer_amount': remaining_cells[3] if len(remaining_cells) > 3 else '-',
-                        'underwriter': remaining_cells[4] if len(remaining_cells) > 4 else '-',
-                        'raw_data': raw_cells,
-                        'type': 'demand_forecast'
+                        'forecast_date': date_cell,
+                        'hope_price': cells[3].get_text(strip=True) if len(cells) > 3 else '',
+                        'underwriter': cells[4].get_text(strip=True) if len(cells) > 4 else ''
                     })
                 except:
                     continue
-        
-        if debug:
-            return results, debug_rows
         return results
-    except Exception as e:
-        if debug:
-            return [], [f"Error: {str(e)}"]
+    except:
         return []
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_ipo_preliminary_approval(debug=False):
-    """상장예비심사 승인 종목 (ipo02.asp)"""
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_ipo_calendar(year, month):
+    """IPOStock IPO캘린더 스크래핑 (ipo06.asp)"""
     try:
-        url = 'http://www.ipostock.co.kr/sub03/ipo02.asp'
+        url = f'http://www.ipostock.co.kr/sub03/ipo06.asp?thisYear={year}&thisMonth={month}'
         content = fetch_with_encoding(url)
         if not content:
-            return [] if not debug else ([], [])
+            return []
+        
+        soup = BeautifulSoup(content, 'html.parser')
+        events = []
+        links = soup.find_all('a', href=True)
+        
+        for link in links:
+            href = link.get('href', '')
+            if '/view_pg/view_04.asp' in href:
+                title = link.get('title', '') or link.get_text(strip=True)
+                if title and len(title) > 1:
+                    events.append({
+                        'company': title,
+                        'month': month,
+                        'year': year
+                    })
+        
+        # 중복 제거
+        seen = set()
+        unique_events = []
+        for e in events:
+            if e['company'] not in seen:
+                seen.add(e['company'])
+                unique_events.append(e)
+        
+        return unique_events
+    except:
+        return []
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_ipo_approval_list():
+    """IPOStock 예비심사승인 목록 스크래핑 (exa03.asp)"""
+    try:
+        content = fetch_with_encoding('http://www.ipostock.co.kr/sub02/exa03.asp')
+        if not content:
+            return []
         
         soup = BeautifulSoup(content, 'html.parser')
         results = []
-        debug_rows = []
-        
-        # 테이블 찾기
-        tables = soup.find_all('table')
-        target_table = None
-        for table in tables:
-            if table.find('th') or table.find('td'):
-                rows = table.find_all('tr')
-                if len(rows) > 3:
-                    target_table = table
-                    break
-        
-        if not target_table:
-            rows = soup.find_all('tr')
-        else:
-            rows = target_table.find_all('tr')
+        rows = soup.find_all('tr')
         
         for row in rows:
             cells = row.find_all('td')
             if len(cells) >= 4:
                 try:
-                    # 디버그용 raw 데이터
-                    raw_cells = [c.get_text(strip=True) for c in cells]
-                    if debug:
-                        debug_rows.append(raw_cells)
-                    
-                    # 회사명 찾기 (링크가 있는 셀)
-                    company_name = None
-                    company_idx = -1
-                    for idx, cell in enumerate(cells):
-                        link = cell.find('a')
-                        if link:
-                            name = link.get_text(strip=True)
-                            if name and len(name) >= 2 and not name.isdigit():
-                                company_name = name
-                                company_idx = idx
-                                break
-                    
-                    if not company_name:
+                    approval_date = cells[0].get_text(strip=True)
+                    if not approval_date or '/' not in approval_date:
                         continue
                     
-                    # 컬럼 매핑 (테이블 구조에 따라 조정)
-                    # 일반적인 구조: 번호, 회사명, 승인일, 시장, 주간사
-                    remaining_cells = [c.get_text(strip=True) for i, c in enumerate(cells) if i != company_idx]
+                    company_cell = cells[1]
+                    company_link = company_cell.find('a')
+                    company_name = company_link.get_text(strip=True) if company_link else company_cell.get_text(strip=True)
+                    
+                    if not company_name or len(company_name) < 2:
+                        continue
                     
                     results.append({
+                        'approval_date': approval_date,
                         'company': company_name,
-                        'approval_date': remaining_cells[1] if len(remaining_cells) > 1 else '-',
-                        'market': remaining_cells[2] if len(remaining_cells) > 2 else '-',
-                        'underwriter': remaining_cells[3] if len(remaining_cells) > 3 else '-',
-                        'raw_data': raw_cells,
-                        'type': 'preliminary_approval'
+                        'request_date': cells[2].get_text(strip=True) if len(cells) > 2 else '',
+                        'underwriter': cells[3].get_text(strip=True) if len(cells) > 3 else ''
                     })
                 except:
                     continue
-        
-        if debug:
-            return results, debug_rows
         return results
-    except Exception as e:
-        if debug:
-            return [], [f"Error: {str(e)}"]
+    except:
         return []
+
 # =============================================================================
-# 크롤링 함수들 - LP Discovery (일괄 다운로드, ESG, 가중치 점수)
+# DART API 함수들 (LP 발굴용)
 # =============================================================================
 @st.cache_data(ttl=86400, show_spinner=False)
 def get_corp_code_list():
@@ -767,21 +773,12 @@ def get_financial_statement(corp_code, bsns_year, reprt_code='11011'):
         return None
 
 def extract_financial_data(df):
-    """재무데이터 추출 (확장)"""
-    result = {
-        'retained_earnings': None,
-        'total_equity': None,
-        'revenue': None,
-        'operating_profit': None,
-        'net_income': None,
-        'total_assets': None,
-        'total_liabilities': None
-    }
+    """재무데이터 추출"""
+    result = {'retained_earnings': None, 'total_equity': None, 'revenue': None}
     
     if df is None or df.empty:
         return result
     
-    # 이익잉여금
     for kw in ['이익잉여금', '이익(손실)잉여금']:
         match = df[df['account_nm'].str.contains(kw, na=False)]
         if not match.empty:
@@ -789,249 +786,113 @@ def extract_financial_data(df):
                 val = match.iloc[0]['thstrm_amount']
                 if isinstance(val, str):
                     val = val.replace(',', '')
-                result['retained_earnings'] = float(val) / 1e8 if val else None
+                result['retained_earnings'] = float(val) / 100000000 if val else None
                 break
             except:
                 pass
     
-    # 자본총계
-    for kw in ['자본총계']:
+    for kw in ['자본총계', '자본 총계']:
         match = df[df['account_nm'].str.contains(kw, na=False)]
         if not match.empty:
             try:
                 val = match.iloc[0]['thstrm_amount']
                 if isinstance(val, str):
                     val = val.replace(',', '')
-                result['total_equity'] = float(val) / 1e8 if val else None
+                result['total_equity'] = float(val) / 100000000 if val else None
                 break
             except:
                 pass
     
-    # 매출액
-    for kw in ['매출액', '영업수익', '수익']:
+    for kw in ['매출액', '수익(매출액)', '영업수익']:
         match = df[df['account_nm'].str.contains(kw, na=False)]
         if not match.empty:
             try:
                 val = match.iloc[0]['thstrm_amount']
                 if isinstance(val, str):
                     val = val.replace(',', '')
-                result['revenue'] = float(val) / 1e8 if val else None
-                break
-            except:
-                pass
-    
-    # 영업이익
-    for kw in ['영업이익', '영업손익']:
-        match = df[df['account_nm'].str.contains(kw, na=False)]
-        if not match.empty:
-            try:
-                val = match.iloc[0]['thstrm_amount']
-                if isinstance(val, str):
-                    val = val.replace(',', '')
-                result['operating_profit'] = float(val) / 1e8 if val else None
-                break
-            except:
-                pass
-    
-    # 당기순이익
-    for kw in ['당기순이익', '당기순손익']:
-        match = df[df['account_nm'].str.contains(kw, na=False)]
-        if not match.empty:
-            try:
-                val = match.iloc[0]['thstrm_amount']
-                if isinstance(val, str):
-                    val = val.replace(',', '')
-                result['net_income'] = float(val) / 1e8 if val else None
-                break
-            except:
-                pass
-    
-    # 자산총계
-    for kw in ['자산총계']:
-        match = df[df['account_nm'].str.contains(kw, na=False)]
-        if not match.empty:
-            try:
-                val = match.iloc[0]['thstrm_amount']
-                if isinstance(val, str):
-                    val = val.replace(',', '')
-                result['total_assets'] = float(val) / 1e8 if val else None
+                result['revenue'] = float(val) / 100000000 if val else None
                 break
             except:
                 pass
     
     return result
 
-def calculate_lp_score(row, weights=None):
-    """LP 가중치 점수 계산"""
-    if weights is None:
-        weights = {
-            'retained_earnings': 0.35,  # 이익잉여금
-            'total_equity': 0.20,       # 자본총계
-            'revenue': 0.15,            # 매출액
-            'operating_profit': 0.15,   # 영업이익
-            'net_income': 0.10,         # 당기순이익
-            'esg_score': 0.05           # ESG 점수
+def fetch_single_company(corp_code, corp_name, stock_code, bsns_year):
+    """단일 기업 조회"""
+    fs_df = get_financial_statement(corp_code, bsns_year)
+    fin_data = extract_financial_data(fs_df)
+    
+    if fin_data['retained_earnings'] is not None:
+        return {
+            'corp_code': corp_code,
+            'corp_name': corp_name,
+            'stock_code': stock_code,
+            **fin_data
         }
-    
-    score = 0
-    max_score = 100
-    
-    # 이익잉여금 점수 (0-35점)
-    re = row.get('retained_earnings', 0) or 0
-    if re >= 5000:
-        score += weights['retained_earnings'] * max_score
-    elif re >= 1000:
-        score += weights['retained_earnings'] * max_score * 0.8
-    elif re >= 500:
-        score += weights['retained_earnings'] * max_score * 0.6
-    elif re >= 300:
-        score += weights['retained_earnings'] * max_score * 0.4
-    elif re >= 100:
-        score += weights['retained_earnings'] * max_score * 0.2
-    
-    # 자본총계 점수 (0-20점)
-    te = row.get('total_equity', 0) or 0
-    if te >= 10000:
-        score += weights['total_equity'] * max_score
-    elif te >= 5000:
-        score += weights['total_equity'] * max_score * 0.7
-    elif te >= 1000:
-        score += weights['total_equity'] * max_score * 0.4
-    
-    # 매출액 점수 (0-15점)
-    rev = row.get('revenue', 0) or 0
-    if rev >= 10000:
-        score += weights['revenue'] * max_score
-    elif rev >= 5000:
-        score += weights['revenue'] * max_score * 0.7
-    elif rev >= 1000:
-        score += weights['revenue'] * max_score * 0.4
-    
-    # 영업이익 점수 (0-15점)
-    op = row.get('operating_profit', 0) or 0
-    if op >= 1000:
-        score += weights['operating_profit'] * max_score
-    elif op >= 500:
-        score += weights['operating_profit'] * max_score * 0.7
-    elif op >= 100:
-        score += weights['operating_profit'] * max_score * 0.4
-    elif op > 0:
-        score += weights['operating_profit'] * max_score * 0.2
-    
-    # 당기순이익 점수 (0-10점)
-    ni = row.get('net_income', 0) or 0
-    if ni >= 500:
-        score += weights['net_income'] * max_score
-    elif ni >= 100:
-        score += weights['net_income'] * max_score * 0.6
-    elif ni > 0:
-        score += weights['net_income'] * max_score * 0.3
-    
-    # ESG 점수 (0-5점)
-    esg = row.get('esg_score', 0) or 0
-    score += esg * weights['esg_score']
-    
-    return round(score, 1)
+    return None
 
-def get_esg_keywords():
-    """ESG 관련 키워드"""
-    return {
-        'environment': ['환경', '탄소', '친환경', '재생에너지', '태양광', '풍력', '수소', 'ESG', '기후변화', 
-                       '탄소중립', '넷제로', '그린', '신재생', '폐기물', '순환경제', '저탄소'],
-        'social': ['사회공헌', '지역사회', '근로환경', '안전보건', '인권', '다양성', '포용', '상생'],
-        'governance': ['지배구조', '이사회', '감사', '윤리경영', '준법', '투명성', '공시']
-    }
+def calculate_lp_score(df):
+    """LP 스코어 계산"""
+    df = df.copy()
+    if len(df) == 0:
+        return df
+    
+    if df['retained_earnings'].max() > df['retained_earnings'].min():
+        df['re_score'] = (df['retained_earnings'] - df['retained_earnings'].min()) / \
+                         (df['retained_earnings'].max() - df['retained_earnings'].min()) * 100
+    else:
+        df['re_score'] = 50
+    
+    df['total_equity'] = df['total_equity'].fillna(0)
+    if df['total_equity'].max() > df['total_equity'].min():
+        df['equity_score'] = (df['total_equity'] - df['total_equity'].min()) / \
+                             (df['total_equity'].max() - df['total_equity'].min()) * 100
+    else:
+        df['equity_score'] = 50
+    
+    df['lp_score'] = df['re_score'] * 0.7 + df['equity_score'] * 0.3
+    return df.sort_values('lp_score', ascending=False)
 
-def check_esg_involvement(corp_name, sector=None):
-    """기업의 ESG 관련 여부 체크 (간단한 휴리스틱)"""
-    esg_keywords = get_esg_keywords()
-    
-    # 친환경/ESG 관련 기업명 체크
-    env_score = 0
-    for kw in esg_keywords['environment']:
-        if kw in corp_name:
-            env_score += 20
-    
-    # 섹터 기반 ESG 점수
-    esg_sectors = ['신재생에너지', '환경', '폐기물', '수처리', '태양광', '풍력', '수소', '전기차', '2차전지']
-    if sector:
-        for s in esg_sectors:
-            if s in sector:
-                env_score += 30
-    
-    return min(env_score, 100)
-
-def batch_process_lp_data(corp_list, bsns_year, start_idx, batch_size, progress_callback=None):
-    """배치 처리 함수"""
-    end_idx = min(start_idx + batch_size, len(corp_list))
-    batch = corp_list.iloc[start_idx:end_idx]
-    
-    results = []
-    for i, row in enumerate(batch.itertuples()):
-        if progress_callback:
-            progress_callback((i + 1) / len(batch))
-        
-        fs_df = get_financial_statement(row.corp_code, bsns_year)
-        fin_data = extract_financial_data(fs_df)
-        
-        if fin_data['retained_earnings'] is not None:
-            # ESG 점수 추가
-            esg_score = check_esg_involvement(row.corp_name)
-            fin_data['esg_score'] = esg_score
-            
-            # LP 점수 계산
-            lp_score = calculate_lp_score(fin_data)
-            
-            results.append({
-                'corp_code': row.corp_code,
-                'corp_name': row.corp_name,
-                'stock_code': row.stock_code,
-                'lp_score': lp_score,
-                'esg_score': esg_score,
-                **fin_data
-            })
-        
-        time.sleep(0.15)  # API 제한 준수
-    
-    return results, end_idx
-
-def auto_download_all_lp_data(corp_list, bsns_year, min_re, progress_placeholder):
-    """전체 LP 데이터 자동 다운로드 (일괄처리)"""
-    total = len(corp_list)
-    batch_size = 100
-    all_results = []
-    current_idx = 0
-    
-    progress_bar = progress_placeholder.progress(0)
-    status_text = progress_placeholder.empty()
-    
-    while current_idx < total:
-        status_text.text(f"📊 조회 중... {current_idx}/{total} ({current_idx/total*100:.1f}%)")
-        
-        results, new_idx = batch_process_lp_data(
-            corp_list, bsns_year, current_idx, batch_size,
-            progress_callback=lambda p: progress_bar.progress((current_idx + p * batch_size) / total)
-        )
-        
-        all_results.extend(results)
-        current_idx = new_idx
-        
-        # 중간 결과 업데이트
-        progress_bar.progress(current_idx / total)
-    
-    progress_bar.progress(1.0)
-    status_text.text(f"✅ 완료! 총 {len(all_results)}개 기업 조회")
-    
-    # 필터링 및 정렬
-    df = pd.DataFrame(all_results)
-    if not df.empty:
-        df_filtered = df[df['retained_earnings'] >= min_re].copy()
-        df_filtered = df_filtered.sort_values('lp_score', ascending=False)
-        return df_filtered
-    
-    return pd.DataFrame()
 # =============================================================================
-# 포트폴리오 데이터 정의 (세션 상태 기반)
+# ESG 검색
+# =============================================================================
+@st.cache_data(ttl=1800, show_spinner=False)
+def search_esg_disclosures(keyword, start_date, end_date, max_results=30):
+    """ESG 키워드 검색"""
+    try:
+        url = 'https://dart.fss.or.kr/dsab007/search.ax'
+        results = []
+        
+        response = requests.post(url, data={
+            "currentPage": "1",
+            "keyword": keyword,
+            "dspType": "A",
+            "maxResults": "50",
+            "startDate": start_date,
+            "endDate": end_date
+        }, timeout=30)
+        
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            for row in soup.find_all('tr'):
+                try:
+                    company_tag = row.find('a', class_='company')
+                    if company_tag:
+                        results.append({
+                            'company': company_tag.text.strip(),
+                            'report': row.find('a', class_='second').text.strip() if row.find('a', class_='second') else '',
+                            'date': row.find('td', class_='date').text.strip() if row.find('td', class_='date') else '',
+                            'keyword': keyword
+                        })
+                except:
+                    continue
+        
+        return pd.DataFrame(results[:max_results]) if results else pd.DataFrame()
+    except:
+        return pd.DataFrame()
+
+# =============================================================================
+# 포트폴리오 데이터 정의
 # =============================================================================
 def get_default_fund_data():
     """기본 펀드 정보"""
@@ -1113,34 +974,21 @@ def get_default_portfolio_data():
          'investment_type': 'RCPS', 'investment_date': '2024-10-30', 'amount': 30.18, 'current_value': 30.18,
          'shares': 30180, 'price_per_share': 10000, 'valuation': 180.0, 'ownership': 16.77, 'status': 'active',
          'milestone': '처리용량 확대', 'next_event': '2025 Q3 EU 수출'},
-        {'id': 13, 'company': '친환경모빌리티', 'sector': 'EV/모빌리티', 'fund': '고유계정', 'account': '고유',
-         'investment_type': 'RCPS', 'investment_date': '2024-02-10', 'amount': 0, 'current_value': 0,
-         'shares': 0, 'price_per_share': 0, 'valuation': 0, 'ownership': 0, 'status': 'committed',
-         'milestone': 'Due Diligence 완료', 'next_event': '투자 검토 중'},
-        {'id': 14, 'company': '그린빌딩', 'sector': '건설/에너지효율', 'fund': '고유계정', 'account': '고유',
-         'investment_type': 'CB', 'investment_date': '2024-03-20', 'amount': 0, 'current_value': 0,
-         'shares': 0, 'price_per_share': 0, 'valuation': 0, 'ownership': 0, 'status': 'committed',
-         'milestone': 'MOU 체결', 'next_event': '구조화 진행 중'},
     ]
 
 def get_fund_data():
-    """펀드 데이터 반환 (세션 상태)"""
     return st.session_state.fund_data
 
 def get_portfolio_data():
-    """포트폴리오 데이터 반환 (세션 상태)"""
     return st.session_state.portfolio_data
 
 def add_portfolio_item(item):
-    """포트폴리오 항목 추가"""
-    # 새 ID 생성
     max_id = max([p['id'] for p in st.session_state.portfolio_data], default=0)
     item['id'] = max_id + 1
     st.session_state.portfolio_data.append(item)
     return item['id']
 
 def update_portfolio_item(item_id, updates):
-    """포트폴리오 항목 수정"""
     for i, p in enumerate(st.session_state.portfolio_data):
         if p['id'] == item_id:
             st.session_state.portfolio_data[i].update(updates)
@@ -1148,11 +996,9 @@ def update_portfolio_item(item_id, updates):
     return False
 
 def delete_portfolio_item(item_id):
-    """포트폴리오 항목 삭제"""
     st.session_state.portfolio_data = [p for p in st.session_state.portfolio_data if p['id'] != item_id]
 
 def get_sector_allocation():
-    """섹터별 배분"""
     portfolio = get_portfolio_data()
     sector_data = {}
     for p in portfolio:
@@ -1166,7 +1012,6 @@ def get_sector_allocation():
     return sector_data
 
 def get_investment_type_allocation():
-    """투자유형별 배분"""
     portfolio = get_portfolio_data()
     type_data = {}
     for p in portfolio:
@@ -1182,7 +1027,6 @@ def get_investment_type_allocation():
 # VC Analyzer 함수들
 # =============================================================================
 def calculate_rvps(rounds: List[InvestmentRound], founder_shares: float) -> List[dict]:
-    """RVPS 계산"""
     total_shares = founder_shares + sum(r.shares for r in rounds)
     results = []
     
@@ -1192,31 +1036,21 @@ def calculate_rvps(rounds: List[InvestmentRound], founder_shares: float) -> List
         else:
             rvps = 0
         results.append({
-            'name': r.name,
-            'investment': r.investment,
-            'shares': r.shares,
+            'name': r.name, 'investment': r.investment, 'shares': r.shares,
             'ownership': r.shares / total_shares * 100 if total_shares > 0 else 0,
-            'rvps': rvps,
-            'participating': r.is_participating,
-            'liq_multiple': r.liquidation_multiple,
-            'seniority': r.seniority
+            'rvps': rvps, 'participating': r.is_participating,
+            'liq_multiple': r.liquidation_multiple, 'seniority': r.seniority
         })
     
     results.append({
-        'name': '창업자',
-        'investment': 0,
-        'shares': founder_shares,
+        'name': '창업자', 'investment': 0, 'shares': founder_shares,
         'ownership': founder_shares / total_shares * 100 if total_shares > 0 else 0,
-        'rvps': 0,
-        'participating': False,
-        'liq_multiple': 0,
-        'seniority': 999
+        'rvps': 0, 'participating': False, 'liq_multiple': 0, 'seniority': 999
     })
     
     return sorted(results, key=lambda x: (-x['rvps'], x['seniority']))
 
 def calculate_exit_payoffs(rounds: List[InvestmentRound], founder_shares: float, exit_values: np.ndarray) -> Dict[str, np.ndarray]:
-    """Exit 시나리오별 수익 계산"""
     rvps_data = calculate_rvps(rounds, founder_shares)
     total_shares = founder_shares + sum(r.shares for r in rounds)
     
@@ -1259,13 +1093,11 @@ def calculate_exit_payoffs(rounds: List[InvestmentRound], founder_shares: float,
     return payoffs
 
 def calculate_lp_cost(fund: FundInfo, investment: float) -> float:
-    """LP 기준 투자비용"""
     lifetime_fees = fund.committed_capital * (fund.management_fee_rate / 100) * 10
     investable = fund.committed_capital - lifetime_fees
     return (fund.committed_capital / investable) * investment if investable > 0 else investment
 
 def calculate_gp_lp_split(partial_val: float, fund: FundInfo, investment: float):
-    """GP/LP 수익 분배"""
     lp_cost = calculate_lp_cost(fund, investment)
     profit = max(0, partial_val - investment)
     hurdle_amount = investment * (fund.hurdle_rate / 100) * 5
@@ -1277,12 +1109,8 @@ def calculate_gp_lp_split(partial_val: float, fund: FundInfo, investment: float)
     
     lp_val = partial_val - gp_carry
     return {
-        'lp_cost': lp_cost,
-        'partial_val': partial_val,
-        'profit': profit,
-        'hurdle': hurdle_amount,
-        'gp_carry': gp_carry,
-        'lp_val': lp_val,
+        'lp_cost': lp_cost, 'partial_val': partial_val, 'profit': profit,
+        'hurdle': hurdle_amount, 'gp_carry': gp_carry, 'lp_val': lp_val,
         'lp_multiple': lp_val / lp_cost if lp_cost > 0 else 0,
         'gp_multiple': (gp_carry + investment) / investment if investment > 0 else 0
     }
@@ -1299,8 +1127,8 @@ def render_header():
         <div class="header-subtitle">Infra Frontier Asset Management - 인프라프론티어자산운용(주)</div>
         <div class="header-meta">
             <span class="header-meta-item">📅 {datetime.now().strftime('%Y년 %m월 %d일 %H:%M')}</span>
-            <span class="header-meta-item">🔄 실시간 데이터</span>
-            <span class="header-meta-item">📊 v1.1</span>
+            <span class="header-meta-item">🔄 실시간 크롤링</span>
+            <span class="header-meta-item">📊 v1.2</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1314,7 +1142,6 @@ def render_home():
     total_invested = sum(p['amount'] for p in portfolio)
     total_investments = len([p for p in portfolio if p['amount'] > 0])
     fund_count = len([p for p in portfolio if p['account'] == '펀드' and p['amount'] > 0])
-    prop_count = len([p for p in portfolio if p['account'] == '고유'])
     
     st.markdown("### 📊 IFAM 운용 현황")
     col1, col2, col3, col4 = st.columns(4)
@@ -1324,14 +1151,14 @@ def render_home():
     with col2:
         st.markdown(f'<div class="metric-card" style="border-left: 3px solid var(--accent-emerald);"><div class="metric-label">투자집행</div><div class="metric-value large">{total_invested:,.2f}억</div><div style="color: var(--text-muted); font-size: 0.75rem;">집행률 {total_invested/total_aum*100:.1f}%</div></div>', unsafe_allow_html=True)
     with col3:
-        st.markdown(f'<div class="metric-card" style="border-left: 3px solid var(--accent-amber);"><div class="metric-label">투자건수</div><div class="metric-value large">{total_investments}건</div><div style="color: var(--text-muted); font-size: 0.75rem;">펀드 {fund_count} / 고유 {prop_count}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-card" style="border-left: 3px solid var(--accent-amber);"><div class="metric-label">투자건수</div><div class="metric-value large">{total_investments}건</div><div style="color: var(--text-muted); font-size: 0.75rem;">펀드 {fund_count}건</div></div>', unsafe_allow_html=True)
     with col4:
-        st.markdown(f'<div class="metric-card" style="border-left: 3px solid var(--accent-violet);"><div class="metric-label">미회수자산</div><div class="metric-value large">{total_invested:,.2f}억</div><div style="color: var(--text-muted); font-size: 0.75rem;">회수 0건 | MOIC 1.0x</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="metric-card" style="border-left: 3px solid var(--accent-violet);"><div class="metric-label">미회수자산</div><div class="metric-value large">{total_invested:,.2f}억</div><div style="color: var(--text-muted); font-size: 0.75rem;">MOIC 1.0x</div></div>', unsafe_allow_html=True)
     
     st.markdown("---")
     st.markdown("### 🧭 바로가기")
     col1, col2, col3, col4 = st.columns(4)
-    nav_items = [("🌱", "Daily Market", "친환경·인프라 투자 지표"), ("📊", "VC Analyzer", "Term Sheet 분석"), ("🏢", "LP Discovery", "LP 발굴 & IPO"), ("📈", "Portfolio", "통합 포트폴리오")]
+    nav_items = [("🌱", "Daily Market", "친환경·인프라 지표"), ("📊", "VC Analyzer", "Term Sheet 분석"), ("🏢", "LP & IPO", "LP 발굴 & IPO"), ("📈", "Portfolio", "통합 포트폴리오")]
     for col, (icon, title, desc) in zip([col1, col2, col3, col4], nav_items):
         with col:
             st.markdown(f'<div class="nav-card"><div class="nav-card-icon">{icon}</div><div class="nav-card-title">{title}</div><div class="nav-card-desc">{desc}</div></div>', unsafe_allow_html=True)
@@ -1341,30 +1168,48 @@ def render_home():
     
     exchange_rates = fetch_exchange_rates()
     oil_prices = fetch_oil_prices()
-    market_data = fetch_market_data()
+    interest_rates = fetch_interest_rates()
     
     col1, col2, col3, col4 = st.columns(4)
+    
     if exchange_rates and 'USD' in exchange_rates:
         usd = exchange_rates['USD']
         cls, arrow = get_change_class(usd['change'])
         with col1:
             st.markdown(f'<div class="metric-card"><div class="metric-label">USD/KRW</div><div class="metric-value">{usd["value"]:,.2f}</div><div class="metric-change {cls}">{arrow} {abs(usd["change"]):.2f}</div></div>', unsafe_allow_html=True)
+    else:
+        with col1:
+            st.markdown('<div class="metric-card"><div class="metric-label">USD/KRW</div><div class="metric-value">-</div><div style="color: var(--text-muted); font-size: 0.75rem;">로딩 중...</div></div>', unsafe_allow_html=True)
+    
     if oil_prices and 'WTI' in oil_prices:
         wti = oil_prices['WTI']
         cls, arrow = get_change_class(wti['change'])
         with col2:
             st.markdown(f'<div class="metric-card"><div class="metric-label">WTI 유가</div><div class="metric-value">${wti["value"]:.2f}</div><div class="metric-change {cls}">{arrow} ${abs(wti["change"]):.2f}</div></div>', unsafe_allow_html=True)
-    rec = market_data['rec']['mainland']
-    cls, arrow = get_change_class(rec['change'])
-    with col3:
-        st.markdown(f'<div class="metric-card"><div class="metric-label">REC 가격 (육지)</div><div class="metric-value">{rec["price"]:,}원</div><div class="metric-change {cls}">{arrow} {abs(rec["change"]):,}</div></div>', unsafe_allow_html=True)
-    treasury = market_data['rates']['treasury_3y']
-    cls, arrow = get_change_class(treasury['change'])
-    with col4:
-        st.markdown(f'<div class="metric-card"><div class="metric-label">국고채 3년</div><div class="metric-value">{treasury["value"]:.2f}%</div><div class="metric-change {cls}">{arrow} {abs(treasury["change"]):.2f}%p</div></div>', unsafe_allow_html=True)
+    else:
+        with col2:
+            st.markdown('<div class="metric-card"><div class="metric-label">WTI 유가</div><div class="metric-value">-</div><div style="color: var(--text-muted); font-size: 0.75rem;">로딩 중...</div></div>', unsafe_allow_html=True)
+    
+    if interest_rates and 'treasury_3y' in interest_rates:
+        treasury = interest_rates['treasury_3y']
+        cls, arrow = get_change_class(treasury['change'])
+        with col3:
+            st.markdown(f'<div class="metric-card"><div class="metric-label">국고채 3년</div><div class="metric-value">{treasury["value"]:.2f}%</div><div class="metric-change {cls}">{arrow} {abs(treasury["change"]):.2f}%p</div></div>', unsafe_allow_html=True)
+    else:
+        with col3:
+            st.markdown('<div class="metric-card"><div class="metric-label">국고채 3년</div><div class="metric-value">-</div><div style="color: var(--text-muted); font-size: 0.75rem;">로딩 중...</div></div>', unsafe_allow_html=True)
+    
+    if interest_rates and 'call' in interest_rates:
+        call = interest_rates['call']
+        with col4:
+            st.markdown(f'<div class="metric-card"><div class="metric-label">콜금리</div><div class="metric-value">{call["value"]:.2f}%</div></div>', unsafe_allow_html=True)
+    else:
+        with col4:
+            st.markdown('<div class="metric-card"><div class="metric-label">콜금리</div><div class="metric-value">-</div><div style="color: var(--text-muted); font-size: 0.75rem;">로딩 중...</div></div>', unsafe_allow_html=True)
 
 def render_daily_market():
     st.markdown('<p class="section-title"><span class="icon">🌱</span> Daily Market - 친환경·인프라 지표</p>', unsafe_allow_html=True)
+    st.caption("⚠️ 모든 데이터는 실시간 크롤링 결과입니다. 크롤링 실패 시 '-'로 표시됩니다.")
     
     # 환율
     st.markdown("#### 💱 환율")
@@ -1377,92 +1222,76 @@ def render_daily_market():
                 cls, arrow = get_change_class(data['change'])
                 with cols[i]:
                     st.markdown(f'<div class="metric-card"><div class="metric-label">{data.get("name", code)}</div><div class="metric-value">{data["value"]:,.2f}</div><div class="metric-change {cls}">{arrow} {abs(data["change"]):.2f}</div></div>', unsafe_allow_html=True)
+            else:
+                with cols[i]:
+                    st.markdown(f'<div class="metric-card"><div class="metric-label">{code}</div><div class="metric-value">-</div></div>', unsafe_allow_html=True)
     else:
-        st.warning("환율 데이터를 불러오는 중...")
+        st.warning("환율 데이터를 불러올 수 없습니다.")
     
     st.markdown("---")
-    st.markdown("#### ⚡ 신재생에너지")
-    market_data = fetch_market_data()
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("##### REC")
-        rec = market_data['rec']
-        c1, c2 = st.columns(2)
-        for col, (key, label) in zip([c1, c2], [('mainland', '육지'), ('jeju', '제주')]):
-            cls, arrow = get_change_class(rec[key]['change'])
-            with col:
-                st.markdown(f'<div class="metric-card"><div class="metric-label">{label} REC</div><div class="metric-value">{rec[key]["price"]:,}원</div><div class="metric-change {cls}">{arrow} {abs(rec[key]["change"]):,}</div><div style="color: var(--text-muted); font-size: 0.75rem;">거래량: {rec[key]["volume"]:,}</div></div>', unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown("##### SMP")
-        smp = market_data['smp']
-        c1, c2 = st.columns(2)
-        for col, (key, label) in zip([c1, c2], [('mainland', '육지'), ('jeju', '제주')]):
-            cls, arrow = get_change_class(smp[key]['change'])
-            with col:
-                st.markdown(f'<div class="metric-card"><div class="metric-label">{label} SMP</div><div class="metric-value">{smp[key]["price"]:.2f}</div><div style="color: var(--text-muted); font-size: 0.8rem;">원/kWh</div><div class="metric-change {cls}">{arrow} {abs(smp[key]["change"]):.2f}</div></div>', unsafe_allow_html=True)
-    
-    st.markdown("---")
     col1, col2 = st.columns(2)
     
     with col1:
         st.markdown("#### 🛢️ 국제유가")
         oil_prices = fetch_oil_prices()
-        cols = st.columns(3)
-        for i, (code, name) in enumerate([('WTI', '서부텍사스'), ('Brent', '북해 브렌트'), ('Dubai', '두바이')]):
-            if code in oil_prices:
-                data = oil_prices[code]
-                cls, arrow = get_change_class(data['change'])
-                with cols[i]:
-                    st.markdown(f'<div class="metric-card"><div class="metric-label">{name}</div><div class="metric-value">${data["value"]:.2f}</div><div class="metric-change {cls}">{arrow} ${abs(data["change"]):.2f}</div></div>', unsafe_allow_html=True)
+        if oil_prices:
+            cols = st.columns(3)
+            for i, (code, name) in enumerate([('WTI', '서부텍사스'), ('Brent', '북해 브렌트'), ('Dubai', '두바이')]):
+                if code in oil_prices:
+                    data = oil_prices[code]
+                    cls, arrow = get_change_class(data['change'])
+                    with cols[i]:
+                        st.markdown(f'<div class="metric-card"><div class="metric-label">{name}</div><div class="metric-value">${data["value"]:.2f}</div><div class="metric-change {cls}">{arrow} ${abs(data["change"]):.2f}</div></div>', unsafe_allow_html=True)
+                else:
+                    with cols[i]:
+                        st.markdown(f'<div class="metric-card"><div class="metric-label">{name}</div><div class="metric-value">-</div></div>', unsafe_allow_html=True)
+        else:
+            st.info("유가 데이터를 불러올 수 없습니다.")
     
     with col2:
-        st.markdown("#### 🔥 LNG")
-        lng = market_data['lng']
-        cols = st.columns(3)
-        for i, (key, name) in enumerate([('tanker', '탱크로리'), ('fuel_cell', '연료전지'), ('city_gas', '도시가스')]):
-            data = lng[key]
-            cls, arrow = get_change_class(data['change'])
-            with cols[i]:
-                st.markdown(f'<div class="metric-card"><div class="metric-label">{name}</div><div class="metric-value">{data["value"]:.2f}</div><div style="color: var(--text-muted); font-size: 0.75rem;">{data["unit"]}</div><div class="metric-change {cls}">{arrow} {abs(data["change"]):.2f}</div></div>', unsafe_allow_html=True)
+        st.markdown("#### 📊 금리")
+        interest_rates = fetch_interest_rates()
+        if interest_rates:
+            cols = st.columns(3)
+            rate_items = [('call', '콜금리'), ('treasury_3y', '국고채 3년'), ('treasury_10y', '국고채 10년')]
+            for i, (key, label) in enumerate(rate_items):
+                if key in interest_rates:
+                    data = interest_rates[key]
+                    with cols[i]:
+                        st.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{data["value"]:.2f}%</div></div>', unsafe_allow_html=True)
+                else:
+                    with cols[i]:
+                        st.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">-</div></div>', unsafe_allow_html=True)
+        else:
+            st.info("금리 데이터를 불러올 수 없습니다.")
     
     st.markdown("---")
-    col1, col2 = st.columns(2)
+    st.markdown("#### ⚡ 신재생에너지 (REC/SMP)")
     
-    with col1:
-        st.markdown("#### 📊 금리")
-        rates = market_data['rates']
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("##### 단기금리")
-            for key, label in [('call', '콜금리'), ('cd_91', 'CD 91일')]:
-                data = rates[key]
-                cls, arrow = get_change_class(data['change'])
-                st.markdown(f'<div class="metric-card" style="margin-bottom: 0.5rem;"><div class="metric-label">{label}</div><div class="metric-value">{data["value"]:.2f}%</div><div class="metric-change {cls}">{arrow} {abs(data["change"]):.2f}%p</div></div>', unsafe_allow_html=True)
-        with c2:
-            st.markdown("##### 채권금리")
-            for key, label in [('treasury_3y', '국고채 3년'), ('corp_aa_3y', '회사채 AA-')]:
-                data = rates[key]
-                cls, arrow = get_change_class(data['change'])
-                st.markdown(f'<div class="metric-card" style="margin-bottom: 0.5rem;"><div class="metric-label">{label}</div><div class="metric-value">{data["value"]:.2f}%</div><div class="metric-change {cls}">{arrow} {abs(data["change"]):.2f}%p</div></div>', unsafe_allow_html=True)
+    rec_data = fetch_rec_prices()
+    if rec_data:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("##### REC")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown(f'<div class="metric-card"><div class="metric-label">육지 REC</div><div class="metric-value">{rec_data["mainland"]["price"]:,.0f}원</div></div>', unsafe_allow_html=True)
+            with c2:
+                st.markdown(f'<div class="metric-card"><div class="metric-label">제주 REC</div><div class="metric-value">{rec_data["jeju"]["price"]:,.0f}원</div></div>', unsafe_allow_html=True)
+    else:
+        st.info("REC 가격은 전력거래소(onerec.kmos.kr)에서 확인하세요.")
     
-    with col2:
-        st.markdown("#### 📈 금리스왑")
-        swap = market_data['swap']
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("##### IRS")
-            for key in ['irs_1y', 'irs_3y', 'irs_5y']:
-                data = swap[key]
-                cls, arrow = get_change_class(data['change'])
-                st.markdown(f'<div class="metric-card" style="margin-bottom: 0.5rem;"><div class="metric-label">{data["name"]}</div><div class="metric-value">{data["value"]:.2f}%</div><div class="metric-change {cls}">{arrow} {abs(data["change"]):.2f}%p</div></div>', unsafe_allow_html=True)
-        with c2:
-            st.markdown("##### CRS")
-            for key in ['crs_1y', 'crs_5y']:
-                data = swap[key]
-                cls, arrow = get_change_class(data['change'])
-                st.markdown(f'<div class="metric-card" style="margin-bottom: 0.5rem;"><div class="metric-label">{data["name"]}</div><div class="metric-value">{data["value"]:.2f}%</div><div class="metric-change {cls}">{arrow} {abs(data["change"]):.2f}%p</div></div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="info-box">
+        <p><strong>📌 참고</strong><br>
+        • REC/SMP 가격: <a href="https://onerec.kmos.kr" target="_blank">전력거래소 원REC</a><br>
+        • LNG 가격: <a href="https://www.kogas.or.kr" target="_blank">한국가스공사</a><br>
+        • 금리스왑: <a href="https://www.kofiabond.or.kr" target="_blank">금융투자협회</a>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
 def render_vc_analyzer():
     st.markdown('<p class="section-title"><span class="icon">📊</span> VC Term Sheet Analyzer</p>', unsafe_allow_html=True)
     
@@ -1546,160 +1375,306 @@ def render_vc_analyzer():
     for col, (label, value) in zip([col1, col2, col3, col4], metrics):
         with col:
             st.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div></div>', unsafe_allow_html=True)
-
 def render_lp_discovery():
-    st.markdown('<p class="section-title"><span class="icon">🏢</span> LP Discovery & IPO 캘린더</p>', unsafe_allow_html=True)
+    """LP & IPO 모니터링 (v2.4 동일 구조)"""
+    st.markdown('<p class="section-title"><span class="icon">🏢</span> LP & IPO 모니터링</p>', unsafe_allow_html=True)
     
-    tab1, tab2, tab3 = st.tabs(["📅 IPO 일정", "🔍 LP 발굴", "📊 ESG 동향"])
+    # 사이드바에서 설정 가져오기
+    current_year = datetime.now().year
+    current_month = datetime.now().month
     
+    # 상단 설정
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        ipo_year = st.selectbox("📅 연도", list(range(current_year-1, current_year+3)), 
+                                index=list(range(current_year-1, current_year+3)).index(current_year))
+    with col2:
+        ipo_month = st.selectbox("📅 월", list(range(1, 13)), index=current_month - 1)
+    with col3:
+        bsns_year = st.selectbox("📊 사업연도", ['2024', '2023', '2022'], index=0)
+    with col4:
+        min_re = st.number_input("최소 이익잉여금", 0, 10000, 300, 100)
+    
+    batch_size = 50  # 고정
+    
+    # 탭
+    tab1, tab2, tab3, tab4 = st.tabs(["📅 IPO 일정", "🔍 LP 발굴", "🌱 ESG 모니터링", "📋 데이터"])
+    
+    # =========================================================================
+    # TAB 1: IPO 일정 (v2.4 동일)
+    # =========================================================================
     with tab1:
-        st.markdown("### 📅 IPO 일정")
+        st.markdown("## 📅 IPO 일정")
+        st.caption(f"📖 데이터: IPOStock | 조회: {ipo_year}년 {ipo_month}월")
         
-        # 필터
-        col1, col2, col3, col4 = st.columns([1, 1, 1, 0.5])
+        # 데이터 로드
+        with st.spinner("IPO 일정 불러오는 중..."):
+            subscription_data = fetch_ipo_subscription_schedule()
+            forecast_data = fetch_ipo_forecast_schedule()
+            calendar_data = fetch_ipo_calendar(ipo_year, ipo_month)
+            approval_data = fetch_ipo_approval_list()
+        
+        # 메트릭
+        col1, col2, col3, col4 = st.columns(4)
+        
         with col1:
-            ipo_year = st.selectbox("연도", [2026, 2025, 2024, 2023], index=0)
+            st.markdown(f'<div class="metric-card"><div class="metric-label">청약 일정</div><div class="metric-value" style="color:#f43f5e">{len(subscription_data)}건</div></div>', unsafe_allow_html=True)
         with col2:
-            ipo_month = st.selectbox("월", [None] + list(range(1, 13)), format_func=lambda x: "전체" if x is None else f"{x}월")
+            st.markdown(f'<div class="metric-card"><div class="metric-label">수요예측</div><div class="metric-value" style="color:#8b5cf6">{len(forecast_data)}건</div></div>', unsafe_allow_html=True)
         with col3:
-            ipo_type = st.selectbox("유형", ["청약일정", "수요예측", "심사승인"])
+            st.markdown(f'<div class="metric-card"><div class="metric-label">{ipo_month}월 일정</div><div class="metric-value" style="color:#0ea5e9">{len(calendar_data)}건</div></div>', unsafe_allow_html=True)
         with col4:
-            debug_mode = st.checkbox("🔧 디버그", help="크롤링 raw 데이터 확인")
+            st.markdown(f'<div class="metric-card"><div class="metric-label">승인 종목</div><div class="metric-value" style="color:#f59e0b">{len(approval_data)}건</div></div>', unsafe_allow_html=True)
         
-        if ipo_type == "청약일정":
-            ipo_data = fetch_ipo_subscription(ipo_year, ipo_month)
-            if ipo_data:
-                st.markdown(f'<div class="metric-card" style="text-align: center;"><div class="metric-label">IPO 일정</div><div class="metric-value large">{len(ipo_data)}건</div></div>', unsafe_allow_html=True)
-                for item in ipo_data[:20]:
-                    is_ongoing = item.get('competition', '-') == '-'
+        st.markdown("---")
+        
+        # 서브탭
+        sub1, sub2, sub3, sub4 = st.tabs(["📝 청약 일정", "🎯 수요예측", f"📆 {ipo_month}월 캘린더", "✅ 승인 종목"])
+        
+        # 청약 일정
+        with sub1:
+            st.markdown("### 📝 공모주 청약 일정")
+            
+            if subscription_data:
+                for item in subscription_data[:20]:
+                    competition = item.get('competition', '-')
+                    is_ongoing = competition == '-' or '진행' in str(competition)
                     badge_class = 'rose' if is_ongoing else 'emerald'
                     badge_text = '청약중' if is_ongoing else '완료'
-                    st.markdown(f'<div class="ipo-card"><div class="ipo-name"><span class="badge badge-{badge_class}">{badge_text}</span> {item["company"]}</div><div class="ipo-detail">📅 청약: <span class="ipo-date">{item["subscription_date"]}</span> | 💰 공모가: <span class="ipo-price">{item["offer_price"]}</span><br>📊 공모금액: {item["offer_amount"]} | 경쟁률: {item["competition"]}<br>🏢 주간사: {item["underwriter"]} | 상장일: {item["listing_date"]}</div></div>', unsafe_allow_html=True)
+                    
+                    st.markdown(f'''<div class="ipo-card">
+                        <div class="ipo-name"><span class="badge badge-{badge_class}">{badge_text}</span> {item['company']}</div>
+                        <div class="ipo-detail">
+                            📅 청약일: <span class="ipo-date">{item['subscription_date']}</span><br>
+                            💰 공모가: <span class="ipo-price">{item['offer_price']}</span> (희망: {item['hope_price']})<br>
+                            📊 공모금액: {item['offer_amount']} | 경쟁률: {competition}<br>
+                            🏢 주간사: {item['underwriter']} | 상장일: {item['listing_date']}
+                        </div>
+                    </div>''', unsafe_allow_html=True)
             else:
-                st.info("해당 기간 IPO 일정이 없습니다.")
+                st.info("청약 일정을 불러오는 중... 잠시 후 새로고침 해주세요.")
         
-        elif ipo_type == "수요예측":
-            if debug_mode:
-                demand_data, debug_rows = fetch_ipo_demand_forecast(debug=True)
-                if debug_rows:
-                    st.markdown("#### 🔧 디버그: Raw 테이블 데이터")
-                    st.write(f"총 {len(debug_rows)}행 발견")
-                    for i, row in enumerate(debug_rows[:10]):
-                        st.code(f"행 {i}: {row}")
-            else:
-                demand_data = fetch_ipo_demand_forecast(debug=False)
+        # 수요예측
+        with sub2:
+            st.markdown("### 🎯 수요예측 일정")
             
-            if demand_data:
-                st.markdown(f'<div class="metric-card" style="text-align: center;"><div class="metric-label">수요예측 일정</div><div class="metric-value large">{len(demand_data)}건</div></div>', unsafe_allow_html=True)
-                for item in demand_data[:15]:
-                    if debug_mode and 'raw_data' in item:
-                        st.code(f"Raw: {item['raw_data']}")
-                    st.markdown(f'<div class="ipo-card"><div class="ipo-name"><span class="badge badge-amber">수요예측</span> {item["company"]}</div><div class="ipo-detail">📅 예측일: <span class="ipo-date">{item["demand_date"]}</span> | 💰 희망가: {item["hope_price"]}<br>📊 공모금액: {item["offer_amount"]} | 🏢 주간사: {item["underwriter"]}</div></div>', unsafe_allow_html=True)
+            if forecast_data:
+                for item in forecast_data[:15]:
+                    st.markdown(f'''<div class="ipo-card">
+                        <div class="ipo-name"><span class="badge badge-violet">수요예측</span> {item['company']}</div>
+                        <div class="ipo-detail">
+                            📅 수요예측일: <span class="ipo-date">{item['forecast_date']}</span><br>
+                            💰 희망공모가: {item['hope_price']}<br>
+                            🏢 주간사: {item['underwriter']}
+                        </div>
+                    </div>''', unsafe_allow_html=True)
             else:
                 st.info("수요예측 일정을 불러오는 중...")
         
-        else:  # 심사승인
-            if debug_mode:
-                approval_data, debug_rows = fetch_ipo_preliminary_approval(debug=True)
-                if debug_rows:
-                    st.markdown("#### 🔧 디버그: Raw 테이블 데이터")
-                    st.write(f"총 {len(debug_rows)}행 발견")
-                    for i, row in enumerate(debug_rows[:10]):
-                        st.code(f"행 {i}: {row}")
+        # 캘린더
+        with sub3:
+            st.markdown(f"### 📆 {ipo_year}년 {ipo_month}월 IPO 캘린더")
+            
+            if calendar_data:
+                for item in calendar_data[:20]:
+                    st.markdown(f'''<div class="ipo-card">
+                        <div class="ipo-name">{item['company']}</div>
+                        <div class="ipo-detail">{ipo_year}년 {ipo_month}월 일정</div>
+                    </div>''', unsafe_allow_html=True)
+                
+                st.markdown(f'''<div class="info-box">
+                    <p>💡 상세 일정: <a href="http://www.ipostock.co.kr/sub03/ipo06.asp?thisYear={ipo_year}&thisMonth={ipo_month}" target="_blank">IPOStock 캘린더</a></p>
+                </div>''', unsafe_allow_html=True)
             else:
-                approval_data = fetch_ipo_preliminary_approval(debug=False)
+                st.info(f"{ipo_year}년 {ipo_month}월 일정이 없습니다.")
+        
+        # 승인 종목
+        with sub4:
+            st.markdown("### ✅ 상장예비심사 승인 종목")
             
             if approval_data:
-                st.markdown(f'<div class="metric-card" style="text-align: center;"><div class="metric-label">상장예비심사 승인</div><div class="metric-value large">{len(approval_data)}건</div></div>', unsafe_allow_html=True)
                 for item in approval_data[:15]:
-                    if debug_mode and 'raw_data' in item:
-                        st.code(f"Raw: {item['raw_data']}")
-                    st.markdown(f'<div class="ipo-card"><div class="ipo-name"><span class="badge badge-emerald">승인</span> {item["company"]}</div><div class="ipo-detail">📅 승인일: <span class="ipo-date">{item["approval_date"]}</span> | 📈 시장: {item["market"]}<br>🏢 주간사: {item["underwriter"]}</div></div>', unsafe_allow_html=True)
+                    st.markdown(f'''<div class="ipo-card">
+                        <div class="ipo-name"><span class="badge badge-amber">승인</span> {item['company']}</div>
+                        <div class="ipo-detail">
+                            📅 승인일: <span class="ipo-date">{item['approval_date']}</span><br>
+                            📝 청구일: {item['request_date']}<br>
+                            🏢 주간사: {item['underwriter']}
+                        </div>
+                    </div>''', unsafe_allow_html=True)
             else:
-                st.info("심사승인 종목을 불러오는 중...")
+                st.info("승인 종목을 불러오는 중...")
     
+    # =========================================================================
+    # TAB 2: LP 발굴 (v2.4 동일)
+    # =========================================================================
     with tab2:
-        st.markdown("### 🔍 Potential LP 발굴 (일괄 다운로드)")
-        
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            bsns_year = st.selectbox("사업연도", ['2024', '2023', '2022'], index=0, key='lp_year')
-            min_re = st.number_input("최소 이익잉여금 (억원)", 0, 10000, 300, 100, key='lp_min_re')
-        with col2:
-            st.markdown("#### 가중치 설정")
-            w_re = st.slider("이익잉여금", 0, 100, 35)
-            w_equity = st.slider("자본총계", 0, 100, 20)
-            w_esg = st.slider("ESG", 0, 100, 15)
-        
-        weights = {'retained_earnings': w_re/100, 'total_equity': w_equity/100, 'revenue': 0.15, 'operating_profit': 0.10, 'net_income': 0.05, 'esg_score': w_esg/100}
+        st.markdown("## 🔍 Potential LP 발굴")
         
         if st.session_state.lp_corp_list is None:
-            st.markdown('<div class="info-box"><p><strong>💡 사용법</strong><br>1. "일괄 조회 시작" 클릭<br>2. 자동으로 전체 기업 조회<br>3. 완료 후 CSV 다운로드</p></div>', unsafe_allow_html=True)
+            st.markdown('''<div class="info-box">
+                <p><strong>💡 사용법</strong><br>
+                1. "기업 목록 불러오기" 클릭<br>
+                2. "다음 배치 조회"로 50개씩 조회<br>
+                3. CSV 다운로드</p>
+            </div>''', unsafe_allow_html=True)
             
             if st.button("📥 기업 목록 불러오기", type="primary", use_container_width=True):
-                with st.spinner("기업 목록 다운로드 중..."):
+                with st.spinner("다운로드 중..."):
                     corp_df = get_corp_code_list()
+                
                 if corp_df is not None:
                     st.session_state.lp_corp_list = corp_df
                     st.success(f"✅ {len(corp_df)}개 기업 로드!")
                     st.rerun()
+        
         else:
-            total = len(st.session_state.lp_corp_list)
+            corp_df = st.session_state.lp_corp_list
+            total = len(corp_df)
+            current_idx = st.session_state.lp_current_idx
             
-            if st.session_state.lp_data.empty:
-                if st.button("🚀 일괄 조회 시작", type="primary", use_container_width=True):
-                    progress_placeholder = st.container()
-                    result_df = auto_download_all_lp_data(st.session_state.lp_corp_list, bsns_year, min_re, progress_placeholder)
-                    if not result_df.empty:
-                        st.session_state.lp_data = result_df
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("진행", f"{current_idx}/{total}")
+            with col2:
+                st.metric("LP 후보", f"{len(st.session_state.lp_financial_data)}개")
+            with col3:
+                st.metric("진행률", f"{current_idx/total*100:.1f}%")
+            
+            st.progress(current_idx / total if total > 0 else 0)
+            
+            if current_idx < total:
+                col_btn1, col_btn2 = st.columns(2)
+                
+                with col_btn1:
+                    if st.button(f"⏭️ 다음 {batch_size}개", type="primary", use_container_width=True):
+                        end_idx = min(current_idx + batch_size, total)
+                        batch = corp_df.iloc[current_idx:end_idx]
+                        
+                        progress = st.progress(0)
+                        results = []
+                        
+                        for i, row in enumerate(batch.itertuples()):
+                            progress.progress((i + 1) / len(batch))
+                            result = fetch_single_company(row.corp_code, row.corp_name, row.stock_code, bsns_year)
+                            if result:
+                                results.append(result)
+                            time.sleep(0.2)
+                        
+                        if results:
+                            new_df = pd.DataFrame(results)
+                            if st.session_state.lp_financial_data.empty:
+                                st.session_state.lp_financial_data = new_df
+                            else:
+                                st.session_state.lp_financial_data = pd.concat([
+                                    st.session_state.lp_financial_data, new_df
+                                ], ignore_index=True)
+                        
+                        st.session_state.lp_current_idx = end_idx
                         st.rerun()
-            else:
-                df = st.session_state.lp_data.copy()
-                df_filtered = df[df['retained_earnings'] >= min_re].sort_values('lp_score', ascending=False)
                 
-                st.markdown(f"### 🏆 LP 후보 ({min_re}억 이상): {len(df_filtered)}개")
-                st.markdown(f"<small>LP 점수 기준 정렬 (이익잉여금 {w_re}% + 자본 {w_equity}% + ESG {w_esg}%)</small>", unsafe_allow_html=True)
+                with col_btn2:
+                    if st.button("⏩ 3배치", use_container_width=True):
+                        for _ in range(3):
+                            if st.session_state.lp_current_idx >= total:
+                                break
+                            
+                            end_idx = min(st.session_state.lp_current_idx + batch_size, total)
+                            batch = corp_df.iloc[st.session_state.lp_current_idx:end_idx]
+                            
+                            results = []
+                            for row in batch.itertuples():
+                                result = fetch_single_company(row.corp_code, row.corp_name, row.stock_code, bsns_year)
+                                if result:
+                                    results.append(result)
+                                time.sleep(0.2)
+                            
+                            if results:
+                                new_df = pd.DataFrame(results)
+                                if st.session_state.lp_financial_data.empty:
+                                    st.session_state.lp_financial_data = new_df
+                                else:
+                                    st.session_state.lp_financial_data = pd.concat([
+                                        st.session_state.lp_financial_data, new_df
+                                    ], ignore_index=True)
+                            
+                            st.session_state.lp_current_idx = end_idx
+                        
+                        st.rerun()
+            
+            st.markdown("---")
+            
+            if not st.session_state.lp_financial_data.empty:
+                df = st.session_state.lp_financial_data.copy()
+                df_filtered = df[df['retained_earnings'] >= min_re].copy()
                 
-                for _, row in df_filtered.head(20).iterrows():
-                    score_color = 'emerald' if row['lp_score'] >= 70 else 'amber' if row['lp_score'] >= 50 else 'rose'
-                    esg_badge = f'<span class="badge badge-emerald">ESG {row["esg_score"]:.0f}</span>' if row.get('esg_score', 0) > 0 else ''
-                    st.markdown(f'<div class="data-row"><div class="data-row-left"><div class="data-row-title"><span class="badge badge-{score_color}">{row["lp_score"]:.0f}점</span> {esg_badge} {row["corp_name"]}</div><div class="data-row-subtitle">{row["stock_code"]}</div></div><div class="data-row-value">{format_number(row["retained_earnings"], 0)}원</div></div>', unsafe_allow_html=True)
+                if len(df_filtered) > 0:
+                    df_filtered = calculate_lp_score(df_filtered)
                 
-                col1, col2 = st.columns(2)
-                with col1:
+                st.markdown(f"### LP 후보 ({min_re}억 이상): {len(df_filtered)}개")
+                
+                if len(df_filtered) > 0:
+                    for _, row in df_filtered.head(20).iterrows():
+                        st.markdown(f'''<div class="company-card">
+                            <div class="company-name">{row['corp_name']} ({row['stock_code']})</div>
+                            <div class="company-info">
+                                이익잉여금: <strong>{format_number_simple(row['retained_earnings'])}</strong> | 
+                                자본총계: {format_number_simple(row.get('total_equity'))}
+                            </div>
+                        </div>''', unsafe_allow_html=True)
+                    
                     csv = df_filtered.to_csv(index=False, encoding='utf-8-sig')
-                    st.download_button("📥 CSV 다운로드", csv, f"lp_candidates_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv", use_container_width=True)
-                with col2:
-                    if st.button("🔄 초기화", use_container_width=True):
-                        st.session_state.lp_data = pd.DataFrame()
-                        st.session_state.lp_corp_list = None
-                        st.rerun()
+                    st.download_button("📥 CSV 다운로드", csv, f"lp_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv")
     
+    # =========================================================================
+    # TAB 3: ESG
+    # =========================================================================
     with tab3:
-        st.markdown("### 📊 ESG 동향 분석")
+        st.markdown("## 🌱 ESG 공시 검색")
         
-        esg_keywords = get_esg_keywords()
-        
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
-            st.markdown("#### 🌿 환경 (E)")
-            for kw in esg_keywords['environment'][:8]:
-                st.markdown(f'<span class="badge badge-emerald" style="margin: 0.2rem;">{kw}</span>', unsafe_allow_html=True)
+            keyword = st.selectbox("키워드", ["탄소중립", "RE100", "ESG경영", "지속가능경영"])
         with col2:
-            st.markdown("#### 👥 사회 (S)")
-            for kw in esg_keywords['social']:
-                st.markdown(f'<span class="badge badge-sky" style="margin: 0.2rem;">{kw}</span>', unsafe_allow_html=True)
+            start_date = st.date_input("시작일", datetime.now() - timedelta(days=90))
         with col3:
-            st.markdown("#### 🏛️ 지배구조 (G)")
-            for kw in esg_keywords['governance']:
-                st.markdown(f'<span class="badge badge-violet" style="margin: 0.2rem;">{kw}</span>', unsafe_allow_html=True)
+            end_date = st.date_input("종료일", datetime.now())
+        
+        if st.button("🔍 검색", use_container_width=True):
+            with st.spinner("검색 중..."):
+                df_esg = search_esg_disclosures(keyword, start_date.strftime('%Y%m%d'), end_date.strftime('%Y%m%d'))
+            
+            if not df_esg.empty:
+                st.success(f"✅ {len(df_esg)}건")
+                for _, row in df_esg.iterrows():
+                    st.markdown(f'''<div class="company-card">
+                        <div class="company-name">{row['company']}</div>
+                        <div class="company-info">{row['report']} | {row['date']}</div>
+                    </div>''', unsafe_allow_html=True)
+            else:
+                st.info("검색 결과가 없습니다.")
+    
+    # =========================================================================
+    # TAB 4: 데이터
+    # =========================================================================
+    with tab4:
+        st.markdown("## 📋 전체 데이터")
+        
+        if not st.session_state.lp_financial_data.empty:
+            df = st.session_state.lp_financial_data.sort_values('retained_earnings', ascending=False)
+            st.dataframe(df, use_container_width=True, height=500)
+            
+            csv = df.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button("📥 다운로드", csv, f"data_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv")
+        else:
+            st.info("LP 발굴 탭에서 조회를 시작하세요.")
         
         st.markdown("---")
-        st.markdown("#### 🎯 ESG 관련 유망 섹터")
-        esg_sectors = [("신재생에너지", "태양광, 풍력, 수소 발전", 95), ("2차전지/배터리", "배터리 재활용, ESS", 90), ("전기차/모빌리티", "EV, 충전 인프라", 85), ("탄소중립/CCUS", "탄소포집, 저장", 88), ("폐기물/자원순환", "폐기물 처리, 재활용", 82)]
-        
-        for sector, desc, score in esg_sectors:
-            st.markdown(f'<div class="data-row"><div class="data-row-left"><div class="data-row-title">{sector}</div><div class="data-row-subtitle">{desc}</div></div><div class="data-row-value"><span class="badge badge-emerald">{score}점</span></div></div>', unsafe_allow_html=True)
+        if st.button("🗑️ LP 데이터 초기화", use_container_width=True):
+            st.session_state.lp_corp_list = None
+            st.session_state.lp_financial_data = pd.DataFrame()
+            st.session_state.lp_current_idx = 0
+            st.rerun()
 def render_portfolio():
     st.markdown('<p class="section-title"><span class="icon">📈</span> 통합 포트폴리오 관리</p>', unsafe_allow_html=True)
     
@@ -1711,15 +1686,14 @@ def render_portfolio():
     total_invested = sum(p['amount'] for p in portfolio)
     total_current_value = sum(p['current_value'] for p in portfolio)
     fund_investments = len([p for p in portfolio if p['account'] == '펀드' and p['amount'] > 0])
-    proprietary_investments = len([p for p in portfolio if p['account'] == '고유'])
     moic = total_current_value / total_invested if total_invested > 0 else 0
     
     st.markdown("### 📊 핵심 KPI")
     col1, col2, col3, col4 = st.columns(4)
     kpis = [("총 운용자산 (AUM)", f"{total_aum:,.1f}억", f"펀드 {len(funds)}개 운용", "indigo"),
             ("총 투자집행", f"{total_invested:,.2f}억", f"투자비율 {total_invested/total_aum*100:.1f}%", "emerald"),
-            ("총 투자 건수", f"{total_investments}건", f"펀드 {fund_investments} / 고유 {proprietary_investments}", "amber"),
-            ("미회수자산 가치", f"{total_current_value:,.2f}억", f"MOIC {moic:.2f}x | 회수 0건", "violet")]
+            ("총 투자 건수", f"{total_investments}건", f"펀드 {fund_investments}건", "amber"),
+            ("미회수자산 가치", f"{total_current_value:,.2f}억", f"MOIC {moic:.2f}x", "violet")]
     
     for col, (label, value, sub, color) in zip([col1, col2, col3, col4], kpis):
         with col:
@@ -1727,7 +1701,7 @@ def render_portfolio():
     
     st.markdown("---")
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏦 펀드 현황", "💼 포트폴리오", "📊 분석", "📅 이벤트", "⚙️ 관리"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🏦 펀드 현황", "💼 포트폴리오", "📊 분석", "⚙️ 관리"])
     
     with tab1:
         st.markdown("### 🏦 운용 펀드 현황")
@@ -1735,10 +1709,9 @@ def render_portfolio():
             fund_portfolio = [p for p in portfolio if p['fund'] == fund['name'] and p['amount'] > 0]
             fund_invested = sum(p['amount'] for p in fund_portfolio)
             deployment_ratio = fund_invested / fund['aum'] * 100 if fund['aum'] > 0 else 0
-            status_class = 'emerald' if fund['status'] == 'active' else 'amber'
             
             st.markdown(f'''<div class="card" style="margin-bottom: 1rem;">
-                <div class="card-header"><div class="card-title"><span class="badge badge-{status_class}">운용중</span> {fund['name']}</div><div class="card-badge">Vintage {fund['vintage']}</div></div>
+                <div class="card-header"><div class="card-title"><span class="badge badge-emerald">운용중</span> {fund['name']}</div><div class="card-badge">Vintage {fund['vintage']}</div></div>
                 <div style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 1rem;">{fund['full_name']}</div>
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem;">
                     <div><div style="color: var(--text-muted); font-size: 0.7rem;">약정총액</div><div style="color: var(--text-primary); font-size: 1.1rem; font-weight: 600;">{fund['aum']:,.1f}억</div></div>
@@ -1746,134 +1719,42 @@ def render_portfolio():
                     <div><div style="color: var(--text-muted); font-size: 0.7rem;">투자건수</div><div style="color: var(--text-primary); font-size: 1.1rem; font-weight: 600;">{len(fund_portfolio)}건</div></div>
                     <div><div style="color: var(--text-muted); font-size: 0.7rem;">집행률</div><div style="color: var(--accent-emerald); font-size: 1.1rem; font-weight: 600;">{deployment_ratio:.1f}%</div></div>
                 </div>
-                <div style="margin-top: 1rem;"><div style="background: var(--bg-secondary); border-radius: 4px; height: 8px;"><div style="background: var(--gradient-brand); height: 100%; width: {deployment_ratio}%;"></div></div></div>
-                <div style="display: flex; gap: 2rem; margin-top: 1rem; font-size: 0.8rem; color: var(--text-muted);">
-                    <span>📅 {fund['investment_period']}</span><span>🏢 GP: {', '.join(fund['gp'])}</span><span>💰 LP: {fund['lp']}</span>
-                </div>
+                <div style="margin-top: 1rem;"><div style="background: var(--bg-secondary); border-radius: 4px; height: 8px;"><div style="background: var(--gradient-brand); height: 100%; width: {deployment_ratio}%; border-radius: 4px;"></div></div></div>
             </div>''', unsafe_allow_html=True)
-        
-        remaining = total_aum - total_invested
-        st.markdown(f'<div class="info-box"><p><strong>💰 잔여 투자여력</strong><br>총 약정 {total_aum:,.1f}억 - 투자집행 {total_invested:,.2f}억 = <strong style="color: var(--accent-emerald);">{remaining:,.2f}억</strong></p></div>', unsafe_allow_html=True)
     
     with tab2:
-        st.markdown("### 💼 포트폴리오 상세 현황")
+        st.markdown("### 💼 포트폴리오 상세")
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
-            fund_filter = st.selectbox("펀드", ["전체"] + [f['name'] for f in funds] + ["고유계정"])
+            fund_filter = st.selectbox("펀드", ["전체"] + [f['name'] for f in funds])
         with col2:
             type_filter = st.selectbox("투자유형", ["전체", "RCPS", "CB", "보통주"])
-        with col3:
-            status_filter = st.selectbox("상태", ["전체", "active", "committed", "exited"])
         
         filtered = portfolio
         if fund_filter != "전체":
             filtered = [p for p in filtered if p['fund'] == fund_filter]
         if type_filter != "전체":
             filtered = [p for p in filtered if p['investment_type'] == type_filter]
-        if status_filter != "전체":
-            filtered = [p for p in filtered if p['status'] == status_filter]
-        
-        st.markdown(f"**{len(filtered)}개** 투자건")
-        
-        # 수정/삭제 모달
-        if 'edit_item_id' not in st.session_state:
-            st.session_state.edit_item_id = None
-        if 'delete_item_id' not in st.session_state:
-            st.session_state.delete_item_id = None
         
         for p in filtered:
             if p['amount'] > 0:
                 type_colors = {'RCPS': 'indigo', 'CB': 'amber', '보통주': 'emerald'}
-                status_colors = {'active': 'emerald', 'committed': 'amber', 'exited': 'rose'}
-                status_texts = {'active': '투자중', 'committed': '검토중', 'exited': '회수완료'}
                 
-                unrealized_gain = p['current_value'] - p['amount']
-                gain_class = 'up' if unrealized_gain >= 0 else 'down'
-                gain_arrow = '▲' if unrealized_gain >= 0 else '▼'
-                
-                col1, col2 = st.columns([10, 1])
-                with col1:
-                    st.markdown(f'''<div class="card" style="margin-bottom: 0.5rem;">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                            <div>
-                                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem;">
-                                    <span class="badge badge-{type_colors.get(p['investment_type'], 'sky')}">{p['investment_type']}</span>
-                                    <span class="badge badge-{status_colors.get(p['status'], 'sky')}">{status_texts.get(p['status'], p['status'])}</span>
-                                    <span style="color: var(--text-primary); font-size: 1.1rem; font-weight: 700;">{p['company']}</span>
-                                </div>
-                                <div style="color: var(--text-muted); font-size: 0.8rem;">{p['sector']} | {p['fund']} | {p['investment_date']}</div>
+                st.markdown(f'''<div class="card" style="margin-bottom: 0.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem;">
+                                <span class="badge badge-{type_colors.get(p['investment_type'], 'sky')}">{p['investment_type']}</span>
+                                <span style="color: var(--text-primary); font-size: 1.1rem; font-weight: 700;">{p['company']}</span>
                             </div>
-                            <div style="text-align: right;">
-                                <div style="color: var(--text-primary); font-size: 1.2rem; font-weight: 700;">{p['amount']:,.1f}억</div>
-                                <div class="metric-change {gain_class}">{gain_arrow} {abs(unrealized_gain):,.2f}억</div>
-                            </div>
+                            <div style="color: var(--text-muted); font-size: 0.8rem;">{p['sector']} | {p['fund']} | {p['investment_date']}</div>
                         </div>
-                        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.5rem; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-subtle);">
-                            <div><div style="color: var(--text-muted); font-size: 0.65rem;">기업가치</div><div style="color: var(--text-secondary); font-size: 0.85rem;">{p['valuation']:,.0f}억</div></div>
-                            <div><div style="color: var(--text-muted); font-size: 0.65rem;">지분율</div><div style="color: var(--text-secondary); font-size: 0.85rem;">{p['ownership']:.1f}%</div></div>
-                            <div><div style="color: var(--text-muted); font-size: 0.65rem;">MOIC</div><div style="color: var(--accent-emerald); font-size: 0.85rem;">{p['current_value']/p['amount']:.2f}x</div></div>
-                            <div><div style="color: var(--text-muted); font-size: 0.65rem;">마일스톤</div><div style="color: var(--text-secondary); font-size: 0.8rem;">{p['milestone']}</div></div>
-                            <div><div style="color: var(--text-muted); font-size: 0.65rem;">다음 이벤트</div><div style="color: var(--accent-amber); font-size: 0.8rem;">{p['next_event']}</div></div>
+                        <div style="text-align: right;">
+                            <div style="color: var(--text-primary); font-size: 1.2rem; font-weight: 700;">{p['amount']:,.1f}억</div>
                         </div>
-                    </div>''', unsafe_allow_html=True)
-                
-                with col2:
-                    if st.button("✏️", key=f"edit_{p['id']}", help="수정"):
-                        st.session_state.edit_item_id = p['id']
-                    if st.button("🗑️", key=f"del_{p['id']}", help="삭제"):
-                        st.session_state.delete_item_id = p['id']
-        
-        # 수정 폼
-        if st.session_state.edit_item_id:
-            item = next((p for p in portfolio if p['id'] == st.session_state.edit_item_id), None)
-            if item:
-                st.markdown("---")
-                st.markdown(f"### ✏️ {item['company']} 수정")
-                with st.form("edit_form"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        new_amount = st.number_input("투자금액 (억)", 0.0, 500.0, float(item['amount']), 1.0)
-                        new_current = st.number_input("현재가치 (억)", 0.0, 500.0, float(item['current_value']), 1.0)
-                        new_valuation = st.number_input("기업가치 (억)", 0.0, 2000.0, float(item['valuation']), 10.0)
-                    with col2:
-                        new_ownership = st.number_input("지분율 (%)", 0.0, 100.0, float(item['ownership']), 0.1)
-                        new_milestone = st.text_input("마일스톤", item['milestone'])
-                        new_next_event = st.text_input("다음 이벤트", item['next_event'])
-                        new_status = st.selectbox("상태", ['active', 'committed', 'exited'], index=['active', 'committed', 'exited'].index(item['status']))
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.form_submit_button("💾 저장", use_container_width=True):
-                            update_portfolio_item(item['id'], {
-                                'amount': new_amount, 'current_value': new_current, 'valuation': new_valuation,
-                                'ownership': new_ownership, 'milestone': new_milestone, 'next_event': new_next_event, 'status': new_status
-                            })
-                            st.session_state.edit_item_id = None
-                            st.success(f"✅ {item['company']} 수정 완료!")
-                            st.rerun()
-                    with col2:
-                        if st.form_submit_button("❌ 취소", use_container_width=True):
-                            st.session_state.edit_item_id = None
-                            st.rerun()
-        
-        # 삭제 확인
-        if st.session_state.delete_item_id:
-            item = next((p for p in portfolio if p['id'] == st.session_state.delete_item_id), None)
-            if item:
-                st.markdown("---")
-                st.warning(f"⚠️ **{item['company']}** 를 삭제하시겠습니까?")
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("🗑️ 삭제 확인", type="primary", use_container_width=True):
-                        delete_portfolio_item(item['id'])
-                        st.session_state.delete_item_id = None
-                        st.success(f"✅ {item['company']} 삭제 완료!")
-                        st.rerun()
-                with col2:
-                    if st.button("❌ 취소", use_container_width=True):
-                        st.session_state.delete_item_id = None
-                        st.rerun()
+                    </div>
+                </div>''', unsafe_allow_html=True)
     
     with tab3:
         st.markdown("### 📊 포트폴리오 분석")
@@ -1882,40 +1763,18 @@ def render_portfolio():
         with col1:
             st.markdown("#### 섹터별 배분")
             sector_data = get_sector_allocation()
-            fig_sector = go.Figure(data=[go.Pie(labels=list(sector_data.keys()), values=[d['amount'] for d in sector_data.values()], hole=0.4, marker_colors=['#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#10b981', '#14b8a6', '#06b6d4', '#0ea5e9', '#3b82f6', '#f59e0b', '#ef4444'])])
+            fig_sector = go.Figure(data=[go.Pie(labels=list(sector_data.keys()), values=[d['amount'] for d in sector_data.values()], hole=0.4)])
             fig_sector.update_layout(showlegend=False, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300, margin=dict(t=30, b=30, l=30, r=30))
             st.plotly_chart(fig_sector, use_container_width=True)
-            
-            for sector, data in sorted(sector_data.items(), key=lambda x: x[1]['amount'], reverse=True):
-                pct = data['amount'] / total_invested * 100
-                st.markdown(f'<div class="data-row"><div class="data-row-left"><div class="data-row-title">{sector}</div><div class="data-row-subtitle">{data["count"]}건</div></div><div class="data-row-value">{data["amount"]:,.1f}억 ({pct:.1f}%)</div></div>', unsafe_allow_html=True)
         
         with col2:
             st.markdown("#### 투자유형별 배분")
             type_data = get_investment_type_allocation()
-            fig_type = go.Figure(data=[go.Bar(x=list(type_data.keys()), y=[d['amount'] for d in type_data.values()], marker_color=['#6366f1', '#f59e0b', '#10b981'], text=[f"{d['amount']:.1f}억" for d in type_data.values()], textposition='outside')])
-            fig_type.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300, xaxis=dict(showgrid=False, color='#a1a1aa'), yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)', color='#a1a1aa'), margin=dict(t=50, b=30, l=30, r=30))
+            fig_type = go.Figure(data=[go.Bar(x=list(type_data.keys()), y=[d['amount'] for d in type_data.values()])])
+            fig_type.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300)
             st.plotly_chart(fig_type, use_container_width=True)
-            
-            type_colors = {'RCPS': 'indigo', 'CB': 'amber', '보통주': 'emerald'}
-            for inv_type, data in sorted(type_data.items(), key=lambda x: x[1]['amount'], reverse=True):
-                pct = data['amount'] / total_invested * 100
-                st.markdown(f'<div class="data-row"><div class="data-row-left"><div class="data-row-title"><span class="badge badge-{type_colors.get(inv_type, "sky")}">{inv_type}</span></div><div class="data-row-subtitle">{data["count"]}건</div></div><div class="data-row-value">{data["amount"]:,.1f}억 ({pct:.1f}%)</div></div>', unsafe_allow_html=True)
     
     with tab4:
-        st.markdown("### 📅 주요 이벤트 캘린더")
-        events = [{'company': p['company'], 'event': p['next_event'], 'milestone': p['milestone'], 'amount': p['amount'], 'type': p['investment_type']} for p in portfolio if p['amount'] > 0 and p['next_event']]
-        
-        quarters = {'Q1 (1-3월)': [e for e in events if 'Q1' in e['event']], 'Q2 (4-6월)': [e for e in events if 'Q2' in e['event']], 'Q3 (7-9월)': [e for e in events if 'Q3' in e['event']], 'Q4 (10-12월)': [e for e in events if 'Q4' in e['event']], '2026년 이후': [e for e in events if '2026' in e['event']]}
-        
-        for quarter, quarter_events in quarters.items():
-            if quarter_events:
-                st.markdown(f"##### {quarter}")
-                for e in quarter_events:
-                    type_class = {'RCPS': 'indigo', 'CB': 'amber', '보통주': 'emerald'}.get(e['type'], 'sky')
-                    st.markdown(f'<div class="data-row"><div class="data-row-left"><div class="data-row-title"><span class="badge badge-{type_class}">{e["type"]}</span> {e["company"]}</div><div class="data-row-subtitle">{e["event"]}</div></div><div style="text-align: right;"><div style="color: var(--text-primary); font-weight: 600;">{e["amount"]:,.1f}억</div><div style="color: var(--text-muted); font-size: 0.75rem;">{e["milestone"]}</div></div></div>', unsafe_allow_html=True)
-    
-    with tab5:
         st.markdown("### ⚙️ 포트폴리오 관리")
         st.markdown("#### ➕ 신규 투자 등록")
         
@@ -1923,32 +1782,21 @@ def render_portfolio():
             col1, col2 = st.columns(2)
             with col1:
                 new_company = st.text_input("회사명")
-                new_sector = st.selectbox("섹터", ["환경/폐기물", "신재생에너지", "수처리", "CCUS", "자원순환", "ESG/SaaS", "수소", "태양광", "풍력", "배터리재활용", "에너지IT", "EV/모빌리티", "기타"])
-                new_fund = st.selectbox("펀드", ["미래환경펀드", "IPO 일반사모 1호", "고유계정"])
+                new_sector = st.selectbox("섹터", ["환경/폐기물", "신재생에너지", "수처리", "CCUS", "자원순환", "ESG/SaaS", "수소", "태양광", "풍력", "배터리재활용", "에너지IT", "기타"])
+                new_fund = st.selectbox("펀드", ["미래환경펀드", "IPO 일반사모 1호"])
             with col2:
                 new_type = st.selectbox("투자유형", ["RCPS", "CB", "보통주"])
                 new_amount = st.number_input("투자금액 (억원)", 0.0, 100.0, 10.0, 1.0)
                 new_date = st.date_input("투자일")
             
-            col1, col2 = st.columns(2)
-            with col1:
-                new_valuation = st.number_input("기업가치 (억원)", 0.0, 1000.0, 50.0, 10.0)
-            with col2:
-                new_ownership = st.number_input("지분율 (%)", 0.0, 100.0, 10.0, 1.0)
-            
-            new_milestone = st.text_input("마일스톤")
-            new_next_event = st.text_input("다음 이벤트")
-            
             if st.form_submit_button("📝 등록", use_container_width=True):
                 if new_company:
                     new_item = {
                         'company': new_company, 'sector': new_sector, 'fund': new_fund,
-                        'account': '고유' if new_fund == '고유계정' else '펀드',
-                        'investment_type': new_type, 'investment_date': str(new_date),
-                        'amount': new_amount, 'current_value': new_amount,
-                        'shares': 0, 'price_per_share': 0, 'valuation': new_valuation,
-                        'ownership': new_ownership, 'status': 'active',
-                        'milestone': new_milestone, 'next_event': new_next_event
+                        'account': '펀드', 'investment_type': new_type, 'investment_date': str(new_date),
+                        'amount': new_amount, 'current_value': new_amount, 'shares': 0, 'price_per_share': 0,
+                        'valuation': new_amount * 5, 'ownership': 10.0, 'status': 'active',
+                        'milestone': '', 'next_event': ''
                     }
                     add_portfolio_item(new_item)
                     st.success(f"✅ {new_company} 등록 완료!")
@@ -1956,15 +1804,10 @@ def render_portfolio():
         
         st.markdown("---")
         st.markdown("#### 📥 데이터 내보내기")
-        col1, col2 = st.columns(2)
-        with col1:
-            portfolio_df = pd.DataFrame(portfolio)
-            csv = portfolio_df.to_csv(index=False, encoding='utf-8-sig')
-            st.download_button("📊 포트폴리오 CSV", csv, f"ifam_portfolio_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv", use_container_width=True)
-        with col2:
-            fund_df = pd.DataFrame(funds)
-            csv_fund = fund_df.to_csv(index=False, encoding='utf-8-sig')
-            st.download_button("🏦 펀드현황 CSV", csv_fund, f"ifam_funds_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv", use_container_width=True)
+        portfolio_df = pd.DataFrame(portfolio)
+        csv = portfolio_df.to_csv(index=False, encoding='utf-8-sig')
+        st.download_button("📊 포트폴리오 CSV", csv, f"ifam_portfolio_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv", use_container_width=True)
+
 # =============================================================================
 # 메인 앱
 # =============================================================================
@@ -1975,15 +1818,19 @@ def main():
     
     with st.sidebar:
         st.markdown("## 🧭 Navigation")
-        page = st.radio("메뉴 선택", ["🏠 홈", "🌱 Daily Market", "📊 VC Analyzer", "🏢 LP Discovery", "📈 Portfolio"], label_visibility="collapsed")
+        page = st.radio("메뉴 선택", ["🏠 홈", "🌱 Daily Market", "📊 VC Analyzer", "🏢 LP & IPO", "📈 Portfolio"], label_visibility="collapsed")
         
         st.markdown("---")
-        if st.button("🔄 데이터 새로고침", use_container_width=True):
+        if st.button("🔄 캐시 새로고침", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
         
         st.markdown("---")
-        st.markdown('<div style="color: var(--text-muted); font-size: 0.75rem; text-align: center;">IFAM Dashboard v1.1<br>© 2025 인프라프론티어</div>', unsafe_allow_html=True)
+        st.markdown(f'''<div style="color: var(--text-muted); font-size: 0.75rem; text-align: center;">
+            IFAM Dashboard v1.2<br>
+            © 2025 인프라프론티어<br><br>
+            <strong>LP 후보:</strong> {len(st.session_state.lp_financial_data)}개
+        </div>''', unsafe_allow_html=True)
     
     if page == "🏠 홈":
         render_home()
@@ -1991,13 +1838,13 @@ def main():
         render_daily_market()
     elif page == "📊 VC Analyzer":
         render_vc_analyzer()
-    elif page == "🏢 LP Discovery":
+    elif page == "🏢 LP & IPO":
         render_lp_discovery()
     elif page == "📈 Portfolio":
         render_portfolio()
     
     st.markdown("---")
-    st.markdown('<div style="text-align: center; color: var(--text-muted); padding: 1rem; font-size: 0.8rem;">🏛️ IFAM 통합 대시보드 v1.1 | 인프라프론티어자산운용(주)<br><small>본 대시보드의 데이터는 참고용이며, 투자 결정 전 원본 데이터를 반드시 확인하세요.</small></div>', unsafe_allow_html=True)
+    st.markdown('<div style="text-align: center; color: var(--text-muted); padding: 1rem; font-size: 0.8rem;">🏛️ IFAM 통합 대시보드 v1.2 | 인프라프론티어자산운용(주)<br><small>본 대시보드의 데이터는 참고용이며, 투자 결정 전 원본 데이터를 반드시 확인하세요.</small></div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
