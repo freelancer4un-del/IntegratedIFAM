@@ -560,78 +560,154 @@ def fetch_ipo_subscription(year=None, month=None):
         return []
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def fetch_ipo_demand_forecast():
-    """수요예측 일정"""
+def fetch_ipo_demand_forecast(debug=False):
+    """수요예측 일정 (ipo01.asp)"""
     try:
         url = 'http://www.ipostock.co.kr/sub03/ipo01.asp'
         content = fetch_with_encoding(url)
         if not content:
-            return []
+            return [] if not debug else ([], [])
         
         soup = BeautifulSoup(content, 'html.parser')
         results = []
-        rows = soup.find_all('tr')
+        debug_rows = []
         
-        for row in rows:
-            cells = row.find_all('td')
-            if len(cells) >= 6:
-                try:
-                    company_cell = cells[1]
-                    company_link = company_cell.find('a')
-                    company_name = company_link.get_text(strip=True) if company_link else company_cell.get_text(strip=True)
-                    
-                    if not company_name or len(company_name) < 2:
-                        continue
-                    
-                    results.append({
-                        'company': company_name,
-                        'demand_date': cells[2].get_text(strip=True) if len(cells) > 2 else '-',
-                        'hope_price': cells[3].get_text(strip=True) if len(cells) > 3 else '-',
-                        'offer_amount': cells[4].get_text(strip=True) if len(cells) > 4 else '-',
-                        'underwriter': cells[5].get_text(strip=True) if len(cells) > 5 else '-',
-                        'type': 'demand_forecast'
-                    })
-                except:
-                    continue
-        return results
-    except:
-        return []
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_ipo_preliminary_approval():
-    """상장예비심사 승인 종목"""
-    try:
-        url = 'http://www.ipostock.co.kr/sub03/ipo02.asp'
-        content = fetch_with_encoding(url)
-        if not content:
-            return []
+        # 테이블 찾기
+        tables = soup.find_all('table')
+        target_table = None
+        for table in tables:
+            if table.find('th') or table.find('td'):
+                rows = table.find_all('tr')
+                if len(rows) > 3:
+                    target_table = table
+                    break
         
-        soup = BeautifulSoup(content, 'html.parser')
-        results = []
-        rows = soup.find_all('tr')
+        if not target_table:
+            rows = soup.find_all('tr')
+        else:
+            rows = target_table.find_all('tr')
         
         for row in rows:
             cells = row.find_all('td')
             if len(cells) >= 5:
                 try:
-                    company_cell = cells[1]
-                    company_link = company_cell.find('a')
-                    company_name = company_link.get_text(strip=True) if company_link else company_cell.get_text(strip=True)
+                    # 디버그용 raw 데이터
+                    raw_cells = [c.get_text(strip=True) for c in cells]
+                    if debug:
+                        debug_rows.append(raw_cells)
                     
-                    if not company_name or len(company_name) < 2:
+                    # 회사명 찾기 (링크가 있는 셀)
+                    company_name = None
+                    company_idx = -1
+                    for idx, cell in enumerate(cells):
+                        link = cell.find('a')
+                        if link:
+                            name = link.get_text(strip=True)
+                            if name and len(name) >= 2 and not name.isdigit():
+                                company_name = name
+                                company_idx = idx
+                                break
+                    
+                    if not company_name:
                         continue
+                    
+                    # 컬럼 매핑 (테이블 구조에 따라 조정)
+                    # 일반적인 구조: 번호, 회사명, 수요예측일, 희망가, 공모금액, 주간사
+                    remaining_cells = [c.get_text(strip=True) for i, c in enumerate(cells) if i != company_idx]
                     
                     results.append({
                         'company': company_name,
-                        'approval_date': cells[2].get_text(strip=True) if len(cells) > 2 else '-',
-                        'market': cells[3].get_text(strip=True) if len(cells) > 3 else '-',
-                        'underwriter': cells[4].get_text(strip=True) if len(cells) > 4 else '-',
+                        'demand_date': remaining_cells[1] if len(remaining_cells) > 1 else '-',
+                        'hope_price': remaining_cells[2] if len(remaining_cells) > 2 else '-',
+                        'offer_amount': remaining_cells[3] if len(remaining_cells) > 3 else '-',
+                        'underwriter': remaining_cells[4] if len(remaining_cells) > 4 else '-',
+                        'raw_data': raw_cells,
+                        'type': 'demand_forecast'
+                    })
+                except:
+                    continue
+        
+        if debug:
+            return results, debug_rows
+        return results
+    except Exception as e:
+        if debug:
+            return [], [f"Error: {str(e)}"]
+        return []
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_ipo_preliminary_approval(debug=False):
+    """상장예비심사 승인 종목 (ipo02.asp)"""
+    try:
+        url = 'http://www.ipostock.co.kr/sub03/ipo02.asp'
+        content = fetch_with_encoding(url)
+        if not content:
+            return [] if not debug else ([], [])
+        
+        soup = BeautifulSoup(content, 'html.parser')
+        results = []
+        debug_rows = []
+        
+        # 테이블 찾기
+        tables = soup.find_all('table')
+        target_table = None
+        for table in tables:
+            if table.find('th') or table.find('td'):
+                rows = table.find_all('tr')
+                if len(rows) > 3:
+                    target_table = table
+                    break
+        
+        if not target_table:
+            rows = soup.find_all('tr')
+        else:
+            rows = target_table.find_all('tr')
+        
+        for row in rows:
+            cells = row.find_all('td')
+            if len(cells) >= 4:
+                try:
+                    # 디버그용 raw 데이터
+                    raw_cells = [c.get_text(strip=True) for c in cells]
+                    if debug:
+                        debug_rows.append(raw_cells)
+                    
+                    # 회사명 찾기 (링크가 있는 셀)
+                    company_name = None
+                    company_idx = -1
+                    for idx, cell in enumerate(cells):
+                        link = cell.find('a')
+                        if link:
+                            name = link.get_text(strip=True)
+                            if name and len(name) >= 2 and not name.isdigit():
+                                company_name = name
+                                company_idx = idx
+                                break
+                    
+                    if not company_name:
+                        continue
+                    
+                    # 컬럼 매핑 (테이블 구조에 따라 조정)
+                    # 일반적인 구조: 번호, 회사명, 승인일, 시장, 주간사
+                    remaining_cells = [c.get_text(strip=True) for i, c in enumerate(cells) if i != company_idx]
+                    
+                    results.append({
+                        'company': company_name,
+                        'approval_date': remaining_cells[1] if len(remaining_cells) > 1 else '-',
+                        'market': remaining_cells[2] if len(remaining_cells) > 2 else '-',
+                        'underwriter': remaining_cells[3] if len(remaining_cells) > 3 else '-',
+                        'raw_data': raw_cells,
                         'type': 'preliminary_approval'
                     })
                 except:
                     continue
+        
+        if debug:
+            return results, debug_rows
         return results
-    except:
+    except Exception as e:
+        if debug:
+            return [], [f"Error: {str(e)}"]
         return []
 # =============================================================================
 # 크롤링 함수들 - LP Discovery (일괄 다운로드, ESG, 가중치 점수)
@@ -1480,13 +1556,15 @@ def render_lp_discovery():
         st.markdown("### 📅 IPO 일정")
         
         # 필터
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 0.5])
         with col1:
-            ipo_year = st.selectbox("연도", [2025, 2024, 2023], index=0)
+            ipo_year = st.selectbox("연도", [2026, 2025, 2024, 2023], index=0)
         with col2:
             ipo_month = st.selectbox("월", [None] + list(range(1, 13)), format_func=lambda x: "전체" if x is None else f"{x}월")
         with col3:
             ipo_type = st.selectbox("유형", ["청약일정", "수요예측", "심사승인"])
+        with col4:
+            debug_mode = st.checkbox("🔧 디버그", help="크롤링 raw 데이터 확인")
         
         if ipo_type == "청약일정":
             ipo_data = fetch_ipo_subscription(ipo_year, ipo_month)
@@ -1501,19 +1579,41 @@ def render_lp_discovery():
                 st.info("해당 기간 IPO 일정이 없습니다.")
         
         elif ipo_type == "수요예측":
-            demand_data = fetch_ipo_demand_forecast()
+            if debug_mode:
+                demand_data, debug_rows = fetch_ipo_demand_forecast(debug=True)
+                if debug_rows:
+                    st.markdown("#### 🔧 디버그: Raw 테이블 데이터")
+                    st.write(f"총 {len(debug_rows)}행 발견")
+                    for i, row in enumerate(debug_rows[:10]):
+                        st.code(f"행 {i}: {row}")
+            else:
+                demand_data = fetch_ipo_demand_forecast(debug=False)
+            
             if demand_data:
                 st.markdown(f'<div class="metric-card" style="text-align: center;"><div class="metric-label">수요예측 일정</div><div class="metric-value large">{len(demand_data)}건</div></div>', unsafe_allow_html=True)
                 for item in demand_data[:15]:
+                    if debug_mode and 'raw_data' in item:
+                        st.code(f"Raw: {item['raw_data']}")
                     st.markdown(f'<div class="ipo-card"><div class="ipo-name"><span class="badge badge-amber">수요예측</span> {item["company"]}</div><div class="ipo-detail">📅 예측일: <span class="ipo-date">{item["demand_date"]}</span> | 💰 희망가: {item["hope_price"]}<br>📊 공모금액: {item["offer_amount"]} | 🏢 주간사: {item["underwriter"]}</div></div>', unsafe_allow_html=True)
             else:
                 st.info("수요예측 일정을 불러오는 중...")
         
         else:  # 심사승인
-            approval_data = fetch_ipo_preliminary_approval()
+            if debug_mode:
+                approval_data, debug_rows = fetch_ipo_preliminary_approval(debug=True)
+                if debug_rows:
+                    st.markdown("#### 🔧 디버그: Raw 테이블 데이터")
+                    st.write(f"총 {len(debug_rows)}행 발견")
+                    for i, row in enumerate(debug_rows[:10]):
+                        st.code(f"행 {i}: {row}")
+            else:
+                approval_data = fetch_ipo_preliminary_approval(debug=False)
+            
             if approval_data:
                 st.markdown(f'<div class="metric-card" style="text-align: center;"><div class="metric-label">상장예비심사 승인</div><div class="metric-value large">{len(approval_data)}건</div></div>', unsafe_allow_html=True)
                 for item in approval_data[:15]:
+                    if debug_mode and 'raw_data' in item:
+                        st.code(f"Raw: {item['raw_data']}")
                     st.markdown(f'<div class="ipo-card"><div class="ipo-name"><span class="badge badge-emerald">승인</span> {item["company"]}</div><div class="ipo-detail">📅 승인일: <span class="ipo-date">{item["approval_date"]}</span> | 📈 시장: {item["market"]}<br>🏢 주간사: {item["underwriter"]}</div></div>', unsafe_allow_html=True)
             else:
                 st.info("심사승인 종목을 불러오는 중...")
